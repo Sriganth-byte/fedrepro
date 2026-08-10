@@ -109,6 +109,40 @@ function shown(value) {
   return value || "Not documented";
 }
 
+function workflowTone(status) {
+  if (status === "Complete") return "low";
+  if (status === "Current" || status === "Needs attention") return "medium";
+  return "default";
+}
+
+function stageStatus(done, current) {
+  if (done) return "Complete";
+  return current ? "Current" : "Pending";
+}
+
+function evidenceQuality(metadata = {}) {
+  const dataTypes = metadata.data_types || {};
+  const missingValues = metadata.missing_values || {};
+  const columns = metadata.column_names || [];
+  const numericCount = Object.values(dataTypes).filter((type) => /int|float|double|decimal|number/i.test(String(type))).length;
+  const suspiciousIdentifierColumns = columns.filter((column) => /(^id$|_id$|uuid|identifier|email|phone)/i.test(column));
+  const issueColumns = columns.filter((column) => (missingValues[column] || 0) > 0 || suspiciousIdentifierColumns.includes(column));
+  return {
+    missingCells: metadata.missing_total ?? 0,
+    duplicateRows: metadata.duplicate_count ?? 0,
+    constantColumns: [],
+    highCardinalityColumns: [],
+    numericCount,
+    categoricalCount: Math.max(0, columns.length - numericCount),
+    suspiciousIdentifierColumns,
+    issueColumns,
+  };
+}
+
+function aiFallbackMessage() {
+  return "Interpretation temporarily unavailable. The measured evidence remains available below.";
+}
+
 function overviewGaps({ hasDataset, configured, latest, hasDiagnosis, hasSemantic, hasContract, diagnosisContract, protocol, onOpenEvidence, onOpenVersions, onOpenDiagnosis }) {
   const gaps=[];
   if(!hasDataset)gaps.push({title:"No Dataset Registered",why:"The study has no dataset evidence to profile, fingerprint, or diagnose.",impact:"Versioning, diagnosis, variant planning, and experiments cannot start.",recommendation:"Register Dataset",action:onOpenEvidence});
@@ -198,18 +232,22 @@ export function EnhancedOverviewPanel({ study, datasets, configuration: configur
   const hasDiagnosis=Boolean(diagnosis||latest?.diagnosis);
   const hasSemantic=Boolean(latest?.semantic_diff)||Boolean(latest?.parent_version_id===null&&latest);
   const hasContract=Boolean(diagnosisContract);
+  const hasVariant=versions.some((version)=>version.generation_method&&version.generation_method!=="manual");
   const workflowStages=[
-    {id:"protocol",label:"Protocol",status:hasProtocol?"Completed":"Needs Review",action:()=>setEditing(true),enabled:true},
-    {id:"evidence",label:"Dataset Evidence",status:hasDataset?"Completed":"Pending",action:onOpenEvidence,enabled:true},
-    {id:"configuration",label:"Configuration",status:hasConfig?"Completed":hasDataset?"Needs Review":"Pending",action:onOpenEvidence,enabled:true},
-    {id:"versioning",label:"Versioning",status:configured?"Completed":"Pending",action:()=>latest?onOpenVersions(latest.id):onOpenVersions(),enabled:true},
-    {id:"diagnosis",label:"Diagnosis",status:hasDiagnosis?"Completed":configured?"Needs Review":"Pending",action:onOpenDiagnosis,enabled:configured},
-    {id:"variant",label:"Variant Planning",status:hasContract&&diagnosisContract.intervention_options?.length?"Needs Review":"Pending",action:onOpenDiagnosis,enabled:hasDiagnosis},
-    {id:"experiments",label:"Experiments",status:"Pending",action:onOpenDiagnosis,enabled:hasContract},
-    {id:"findings",label:"Research Findings",status:"Pending",action:()=>{window.location.href="/findings";},enabled:true}
-  ];
-  const completedCount=workflowStages.filter((stage)=>stage.status==="Completed").length;
-  const nextStage=workflowStages.find((stage)=>stage.status!=="Completed"&&stage.enabled)||workflowStages.find((stage)=>stage.enabled);
+    {id:"study",label:"Study",status:stageStatus(hasProtocol,!hasProtocol),action:()=>setEditing(true),enabled:true},
+    {id:"evidence",label:"Evidence",status:stageStatus(hasDataset,hasProtocol&&!hasDataset),action:onOpenEvidence,enabled:true},
+    {id:"version",label:"Version",status:stageStatus(configured,hasDataset&&!configured),action:()=>latest?onOpenVersions(latest.id):onOpenVersions(),enabled:hasDataset},
+    {id:"fingerprint",label:"Fingerprint",status:stageStatus(hasFingerprint,configured&&!hasFingerprint),action:()=>latest&&onOpenVersions(latest.id),enabled:configured},
+    {id:"profile",label:"Profile",status:stageStatus(hasProfile,configured&&!hasProfile),action:()=>latest&&onOpenVersions(latest.id),enabled:configured},
+    {id:"diagnosis",label:"Diagnose",status:stageStatus(hasDiagnosis,configured&&!hasDiagnosis),action:onOpenDiagnosis,enabled:configured},
+    {id:"variants",label:"Variants",status:stageStatus(hasVariant,hasDiagnosis&&!hasVariant),action:onOpenDiagnosis,enabled:hasDiagnosis},
+    {id:"evaluate",label:"Evaluate",status:"Pending",action:onOpenDiagnosis,enabled:hasVariant},
+    {id:"reproduce",label:"Reproduce",status:stageStatus(Boolean(hasFingerprint&&latest?.configuration?.configuration_hash),configured&&!hasFingerprint),action:()=>latest&&onOpenVersions(latest.id),enabled:configured}
+  ].filter((stage)=>stage.enabled!==false);
+  const completedCount=workflowStages.filter((stage)=>stage.status==="Complete").length;
+  const workflowCompletion=Math.round((completedCount/Math.max(workflowStages.length,1))*100);
+  const currentStage=workflowStages.find((stage)=>stage.status==="Current"||stage.status==="Needs attention")||workflowStages.find((stage)=>stage.status!=="Complete");
+  const nextStage=currentStage||workflowStages.at(-1);
   const nextAction=[nextStage?.label?`Continue: ${nextStage.label}`:"Continue workflow",nextStage?.action||onOpenVersions];
   const integrity=[
     ["Dataset hash", latest?.fingerprint?.file_hash||latest?.file_hash],
@@ -228,7 +266,7 @@ export function EnhancedOverviewPanel({ study, datasets, configuration: configur
     setAiStatus("Generating evidence-bound research brief...");
     setAiResult(null);
     try{setAiResult(await aiApi.explain(study.id,payload));setAiStatus("");}
-    catch(err){setAiStatus(err.response?.data?.detail||"AI research brief failed.");}
+    catch(err){setAiStatus(aiFallbackMessage());}
   };
   const exportDiagnosisReport=async()=>{
     if(!latest?.id)return;
@@ -273,26 +311,35 @@ export function EnhancedOverviewPanel({ study, datasets, configuration: configur
     </Card>
 
     {/* ── Protocol Completeness Card (Refinement #1) ── */}
-    {configuration&&(
-      <Card className="protocol-completeness-card">
+    <Card className="protocol-completeness-card">
         <div className="completeness-header">
           <div>
-            <p className="eyebrow">Research protocol readiness</p>
-            <h2>Protocol completeness</h2>
+            <p className="eyebrow">Workflow readiness</p>
+            <h2>{completedCount} of {workflowStages.length} evidence stages complete</h2>
           </div>
-          <span className={`completeness-badge ${configuration.completeness_score===100?"complete":configuration.completeness_score>=60?"partial":"low"}`}>
-            {configuration.completeness_score}%
+          <span className={`completeness-badge ${workflowCompletion===100?"complete":workflowCompletion>=60?"partial":"low"}`}>
+            {workflowCompletion}%
           </span>
         </div>
-        <div className="completeness-bar-track" role="progressbar" aria-valuenow={configuration.completeness_score} aria-valuemin={0} aria-valuemax={100}>
+        <div className="completeness-bar-track" role="progressbar" aria-valuenow={workflowCompletion} aria-valuemin={0} aria-valuemax={100}>
           <div
-            className={`completeness-bar-fill ${configuration.completeness_score===100?"complete":configuration.completeness_score>=60?"partial":"low"}`}
-            style={{width:`${configuration.completeness_score}%`}}
+            className={`completeness-bar-fill ${workflowCompletion===100?"complete":workflowCompletion>=60?"partial":"low"}`}
+            style={{width:`${workflowCompletion}%`}}
           />
         </div>
-        {configuration.missing_fields&&configuration.missing_fields.length>0&&(
+        <div className="workflow-stage-summary">
+          {workflowStages.map((stage)=><button key={stage.id} className={`workflow-pill ${stage.status.toLowerCase().replace(/\s+/g,"-")}`} onClick={stage.action} disabled={!stage.action}>
+            <span>{stage.label}</span><Badge tone={workflowTone(stage.status)}>{stage.status}</Badge>
+          </button>)}
+        </div>
+        <div className="context-list compact">
+          <div className="context-row"><strong>Current stage</strong><span>{currentStage?.label||"Complete"}</span></div>
+          <div className="context-row"><strong>Next action</strong><span>{nextAction[0]}</span></div>
+          <div className="context-row"><strong>Protocol field score</strong><span>{configuration?.completeness_score??"Not Available"}%</span></div>
+        </div>
+        {configuration?.missing_fields&&configuration.missing_fields.length>0&&(
           <div className="completeness-missing">
-            <p className="eyebrow">Missing fields</p>
+            <p className="eyebrow">Protocol fields still missing</p>
             <div className="completeness-chips">
               {configuration.missing_fields.map((field)=>(
                 <span key={field} className="completeness-chip missing">{field.replace(/_/g," ")}</span>
@@ -300,15 +347,14 @@ export function EnhancedOverviewPanel({ study, datasets, configuration: configur
             </div>
           </div>
         )}
-        {configuration.missing_fields&&configuration.missing_fields.length===0&&(
+        {false&&configuration?.missing_fields&&configuration.missing_fields.length===0&&(
           <p className="completeness-all-ok">✓ All 10 protocol fields are documented</p>
         )}
         <div className="completeness-meta">
-          {configuration.change_reason&&<span className="muted">Last change: {configuration.change_reason}</span>}
-          <span className="muted">Protocol V{configuration.version_number}{configuration.source_configuration_id?` (derived from V${configuration.version_number-1})`:" (baseline)"}</span>
+          {configuration?.change_reason&&<span className="muted">Last protocol change: {configuration.change_reason}</span>}
+          {latest&&<span className="muted">Active evidence: {latestDatasetName||"Dataset"} V{latest.version_number}</span>}
         </div>
       </Card>
-    )}
 
     <Card className="overview-protocol-card">
       <div className="row">
@@ -327,7 +373,7 @@ export function EnhancedOverviewPanel({ study, datasets, configuration: configur
 
     <Card>
       <p className="eyebrow">Workflow progress</p><h2>Research pipeline</h2>
-      <div className="workflow-rail">{workflowStages.map((stage)=><button key={stage.id} className={`workflow-stage ${stage.status==="Completed"?"complete":stage.status==="Needs Review"?"review":"pending"}`} disabled={!stage.enabled} onClick={stage.action}><span>{stage.label}</span><Badge tone={stage.status==="Completed"?"low":stage.status==="Needs Review"?"medium":"default"}>{stage.status}</Badge></button>)}</div>
+      <div className="workflow-rail">{workflowStages.map((stage)=><button key={stage.id} className={`workflow-stage ${stage.status==="Complete"?"complete":stage.status==="Current"?"review":"pending"}`} disabled={!stage.action} onClick={stage.action}><span>{stage.label}</span><Badge tone={workflowTone(stage.status)}>{stage.status}</Badge></button>)}</div>
     </Card>
     {false&&<>
 
@@ -599,9 +645,11 @@ export function EnhancedEvidencePanel({ study, datasets, refresh, onVersion }) {
       <summary><div><p className="eyebrow">Selected registration</p><h2>Evidence certificate</h2></div>{selected&&<Badge>{selected.dataset_name}</Badge>}</summary>
       <div className="collapsible-body">
         <div className="evidence-detail-grid">
-          <RegistrationDetail selected={selected} />
+          <RegistrationDetail selected={selected} study={study} />
           <EvidenceChecklist selected={selected} />
         </div>
+        {selected&&<EvidenceQualitySummary selected={selected} />}
+        {selected&&<SchemaEvidenceTable selected={selected} configuredVersion={selected.dataset_versions?.find((version)=>version.registration_id===selected.id)} />}
         {reportStatus&&<Notice error={reportStatus.includes("Could not")}>{reportStatus}</Notice>}
         {report&&<EvidenceExplanationReport report={report} />}
       </div>
@@ -615,19 +663,26 @@ function EvidenceStat({ icon: Icon, label, value }) {
   return <div className="evidence-stat"><Icon size={15}/><span><strong>{label}</strong>{value}</span></div>;
 }
 
-function RegistrationDetail({ selected }) {
+function RegistrationDetail({ selected, study }) {
   if(!selected)return <Card><Empty>Select a registered dataset to inspect metadata and schema.</Empty></Card>;
   const metadata=selected.metadata||{};
   const validation=selected.validation||{};
+  const configuredVersion=selected.dataset_versions?.find((version)=>version.registration_id===selected.id);
   return <Card className="registration-detail-card">
     <p className="eyebrow">Selected registration</p><h2>{selected.dataset_name}</h2>
     <div className="context-list">
+      <div className="context-row"><strong>Registration ID</strong><span>{selected.id}</span></div>
+      <div className="context-row"><strong>Version association</strong><span>{configuredVersion?`V${configuredVersion.version_number}`:"Not configured"}</span></div>
+      <div className="context-row"><strong>ML task</strong><span>{study?.ml_task||"Not available"}</span></div>
+      <div className="context-row"><strong>Target column</strong><span>{configuredVersion?.configuration?.target_column||"Not configured"}</span></div>
       <div className="context-row"><strong>Original file</strong><span>{selected.original_filename}</span></div>
+      <div className="context-row"><strong>File type</strong><span>CSV</span></div>
       <div className="context-row"><strong>File size</strong><span>{formatBytes(selected.file_size)}</span></div>
       <div className="context-row"><strong>Rows</strong><span>{metadata.row_count??"Not available"}</span></div>
       <div className="context-row"><strong>Columns</strong><span>{metadata.column_count??"Not available"}</span></div>
       <div className="context-row"><strong>Missing cells</strong><span>{metadata.missing_total??"Not available"}</span></div>
       <div className="context-row"><strong>Duplicate rows</strong><span>{metadata.duplicate_count??"Not available"}</span></div>
+      <div className="context-row"><strong>Registered</strong><span>{formatDate(selected.created_at)||"Not available"}</span></div>
       <div className="context-row"><strong>Validation</strong><span>{validation.valid_csv&&validation.schema_valid?"valid":selected.status}</span></div>
     </div>
   </Card>;
@@ -647,6 +702,79 @@ function EvidenceChecklist({ selected }) {
     <p className="eyebrow">Evidence completeness</p><h2>Artifact status</h2>
     <div className="readiness-list">{items.map(([label,done])=><div key={label} className={done?"complete":""}><CheckCircle2 size={15}/><span>{label}</span></div>)}</div>
     {selected?.version_notes&&<div className="evidence-notes"><strong>Research notes</strong><pre className="pre">{selected.version_notes}</pre></div>}
+  </Card>;
+}
+
+function EvidenceQualitySummary({ selected }) {
+  const quality=evidenceQuality(selected.metadata||{});
+  return <Card className="evidence-quality-card">
+    <p className="eyebrow">Evidence quality summary</p><h2>Computed from registration metadata</h2>
+    <div className="grid grid-4">
+      <MetricCard label="Missing cells" value={quality.missingCells} icon={Gauge} />
+      <MetricCard label="Duplicate rows" value={quality.duplicateRows} icon={Copy} />
+      <MetricCard label="Numeric columns" value={quality.numericCount} icon={TableProperties} />
+      <MetricCard label="Categorical columns" value={quality.categoricalCount} icon={Database} />
+    </div>
+    <div className="context-list compact">
+      <div className="context-row"><strong>Suspicious identifiers</strong><span>{quality.suspiciousIdentifierColumns.join(", ")||"None detected"}</span></div>
+      <div className="context-row"><strong>Columns needing inspection</strong><span>{quality.issueColumns.length}</span></div>
+    </div>
+  </Card>;
+}
+
+function SchemaEvidenceTable({ selected, configuredVersion }) {
+  const metadata=selected.metadata||{};
+  const columns=metadata.column_names||[];
+  const dataTypes=metadata.data_types||{};
+  const missingValues=metadata.missing_values||{};
+  const target=configuredVersion?.configuration?.target_column;
+  const [search,setSearch]=useState("");
+  const [typeFilter,setTypeFilter]=useState("all");
+  const [issueOnly,setIssueOnly]=useState(false);
+  const [page,setPage]=useState(0);
+  const pageSize=12;
+  const rows=columns.map((name,index)=>{
+    const dtype=dataTypes[name]||"Not available";
+    const missing=missingValues[name]||0;
+    const missingRatio=metadata.row_count?missing/metadata.row_count:0;
+    const numeric=/int|float|double|decimal|number/i.test(String(dtype));
+    const suspicious=/(^id$|_id$|uuid|identifier|email|phone)/i.test(name);
+    return {position:index+1,name,data_type:dtype,kind:numeric?"numeric":"categorical",role:name===target?"target":"feature",missing_count:missing,missing_ratio:missingRatio,unique_count:metadata.unique_values?.[name],issue:missing>0||suspicious};
+  });
+  const filtered=rows.filter((row)=>{
+    const matchesSearch=!search||row.name.toLowerCase().includes(search.toLowerCase());
+    const matchesType=typeFilter==="all"||row.kind===typeFilter;
+    const matchesIssue=!issueOnly||row.issue;
+    return matchesSearch&&matchesType&&matchesIssue;
+  });
+  const maxPage=Math.max(0,Math.ceil(filtered.length/pageSize)-1);
+  const safePage=Math.min(page,maxPage);
+  const visible=filtered.slice(safePage*pageSize,safePage*pageSize+pageSize);
+  return <Card className="schema-evidence-card">
+    <div className="row">
+      <div><p className="eyebrow">Schema intelligence</p><h2>{columns.length} captured columns</h2></div>
+      <Badge tone="low">{filtered.length} shown</Badge>
+    </div>
+    <div className="filter-row">
+      <Field label="Search"><input value={search} onChange={(event)=>{setSearch(event.target.value);setPage(0);}} placeholder="Column name" /></Field>
+      <Field label="Datatype"><select value={typeFilter} onChange={(event)=>{setTypeFilter(event.target.value);setPage(0);}}><option value="all">All</option><option value="numeric">Numeric</option><option value="categorical">Categorical</option></select></Field>
+      <label className="checkbox-field"><input type="checkbox" checked={issueOnly} onChange={(event)=>{setIssueOnly(event.target.checked);setPage(0);}} /> Issue-only</label>
+    </div>
+    {!visible.length?<Empty>No columns match the current filters.</Empty>:<DataTable rows={visible} columns={[
+      {key:"position",label:"#"},
+      {key:"name",label:"Column"},
+      {key:"data_type",label:"Datatype"},
+      {key:"role",label:"Role",render:(row)=><Badge tone={row.role==="target"?"medium":"default"}>{row.role}</Badge>},
+      {key:"missing_count",label:"Missing"},
+      {key:"missing_ratio",label:"Missing %",render:(row)=>pct(row.missing_ratio)},
+      {key:"unique_count",label:"Unique",render:(row)=>row.unique_count??"Not captured"},
+      {key:"issue",label:"State",render:(row)=><Badge tone={row.issue?"medium":"low"}>{row.issue?"Inspect":"Clear"}</Badge>},
+    ]} />}
+    <div className="pagination-row">
+      <Button variant="secondary compact" disabled={safePage===0} onClick={()=>setPage(safePage-1)}>Previous</Button>
+      <span>Page {safePage+1} of {maxPage+1}</span>
+      <Button variant="secondary compact" disabled={safePage>=maxPage} onClick={()=>setPage(safePage+1)}>Next</Button>
+    </div>
   </Card>;
 }
 
@@ -920,7 +1048,7 @@ export function VersionPanel({ study, datasets, selectedVersion, profile, semant
       setMetricAiResult(await aiApi.semanticMetrics(study.id,semantic.id));
       setMetricAiStatus("");
     }catch(err){
-      setMetricAiStatus(err.response?.data?.detail||"AI metric interpretation failed.");
+      setMetricAiStatus(aiFallbackMessage());
     }
   };
   const generateExecutiveSummary=async()=>{
@@ -931,7 +1059,7 @@ export function VersionPanel({ study, datasets, selectedVersion, profile, semant
       setExecutiveResult(await aiApi.versionExecutiveSummary(study.id,selectedWithEvidence.id));
       setExecutiveStatus("");
     }catch(err){
-      setExecutiveStatus(err.response?.data?.detail||"AI executive summary failed.");
+      setExecutiveStatus(aiFallbackMessage());
     }
   };
   const loadEvidenceReport=async()=>{
@@ -944,7 +1072,7 @@ export function VersionPanel({ study, datasets, selectedVersion, profile, semant
       downloadBlob(new Blob([text],{type:"text/markdown;charset=utf-8"}),`fedrepro-v${selectedWithEvidence.version_number}-dataset-explanation-report.md`);
       setReportStatus("Detailed explanation report downloaded.");
     }catch(err){
-      setReportStatus(err.response?.data?.detail||"Could not generate explanation report.");
+      setReportStatus(aiFallbackMessage());
     }
   };
   return <div className="stack">
@@ -992,7 +1120,6 @@ export function VersionPanel({ study, datasets, selectedVersion, profile, semant
       <ExecutiveSummaryPanel version={selectedWithEvidence} onGenerate={generateExecutiveSummary} status={executiveStatus} result={executiveResult} />
       <ReproducibilitySnapshot version={selectedWithEvidence} parentLabel={parentVersionLabel(selectedWithEvidence)} />
       <FingerprintBreakdown version={selectedWithEvidence} focus={detailTab==="fingerprint"} />
-      <RiskActionPanel selectedVersion={selectedWithEvidence} onOpenDiagnosis={onOpenDiagnosis} />
       <LineageTimeline versions={versions} selectedVersion={selectedWithEvidence} parentLabel={parentVersionLabel} onSelect={(row)=>loadVersion(row,"lineage")} />
       <ComparisonSelector study={study} selectedVersion={selectedWithEvidence} versions={versions} compareBase={compareBase} compareId={compareId} setCompareId={setCompareId} options={compareOptions} semantic={semantic} />
       <VersionExportActions study={study} version={selectedWithEvidence} semantic={semantic} onExportBundle={exportBundle} onLoadReport={loadEvidenceReport} onExecutiveSummary={generateExecutiveSummary} reportStatus={reportStatus||executiveStatus} />
@@ -1226,34 +1353,65 @@ function RecreationResult({ result }) {
 }
 
 function LineageTimeline({ versions, selectedVersion, focus, onSelect, parentLabel = (version)=>version?.parent_version_id?`V${version.parent_version_id}`:"Baseline" }) {
+  const childrenByParent=versions.reduce((acc,version)=>{
+    const key=version.parent_version_id||"root";
+    acc[key]=[...(acc[key]||[]),version];
+    return acc;
+  },{});
+  const selectedDiff=selectedVersion?.semantic_diff;
+  const renderNode=(version,depth=0)=>{
+    const diff=version.semantic_diff;
+    const report=diff?.report||{};
+    const transition=transitionLabel(version, report);
+    const significant=Number(diff?.scm_score||0)>=30||Number(diff?.dsi_score||0)>=30;
+    const children=childrenByParent[version.id]||[];
+    return <div key={version.id} className="lineage-branch" style={{"--depth":depth}}>
+      <button className={`lineage-graph-node ${version.id===selectedVersion.id?"active":""} ${significant?"significant":""}`} onClick={()=>onSelect(version)} title={`V${version.version_number}, parent ${parentLabel(version)}`}>
+        <span className="lineage-node-title">V{version.version_number}</span>
+        <span>{transition}</span>
+        <small>{version.row_count} x {version.column_count} | {formatDate(version.created_at)||"Not Available"}</small>
+        <span className="lineage-badges">
+          {!version.parent_version_id&&<Badge>Baseline</Badge>}
+          {significant&&<Badge tone="medium">Significant</Badge>}
+          {diff?.scm_score!=null&&<Badge>SCM {metricValue(diff.scm_score)}</Badge>}
+          {diff?.dsi_score!=null&&<Badge>DSI {metricValue(diff.dsi_score)}</Badge>}
+        </span>
+      </button>
+      {!!children.length&&<div className="lineage-children">{children.sort((a,b)=>a.version_number-b.version_number).map((child)=>renderNode(child,depth+1))}</div>}
+    </div>;
+  };
+  const roots=(childrenByParent.root||versions.filter((version)=>!version.parent_version_id)).sort((a,b)=>a.version_number-b.version_number);
   return <Card id="version-lineage-section" className={focus?"lineage-card focus-ring":"lineage-card"}>
-    <p className="eyebrow">Version Lineage</p><h2>Dataset evolution story</h2>
-    <div className="lineage-timeline">
-      {versions.map((version,index)=>{
-        const diff=version.semantic_diff;
-        const report=diff?.report||{};
-        const numericChanges=Object.keys(report.numeric_distribution_changes||{}).length;
-        const categoricalChanges=Object.keys(report.categorical_distribution_changes||{}).length;
-        const schemaChange=(report.columns_added?.length||0)+(report.columns_removed?.length||0)+Object.keys(report.data_type_changes||{}).length;
-        const missingChanges=Object.keys(report.missingness_changes_by_column||{}).length;
-        const story=!version.parent_version_id?"Baseline evidence artifact for this dataset.":lineageCompactStory(version, report);
-        const implication=!version.parent_version_id?"Use as the reference point for later semantic comparisons.":lineageImplication({schemaChange,missingChanges,numericChanges,categoricalChanges,semantic:diff});
-        const badges=[
-          !version.parent_version_id&&"Baseline",
-          report.row_count_change&&`${signed(report.row_count_change)} rows`,
-          report.column_count_change&&`${signed(report.column_count_change)} cols`,
-          report.missing_ratio_change&&`${signedPct(report.missing_ratio_change)} missing`,
-          report.duplicate_rows?.delta&&`${signed(report.duplicate_rows.delta)} dup`,
-          diff?.scm_score!=null&&`SCM ${metricValue(diff.scm_score)}`,
-          diff?.dsi_score!=null&&`DSI ${metricValue(diff.dsi_score)}`
-        ].filter(Boolean);
-        return <button key={version.id} className={version.id===selectedVersion.id?"lineage-node active":"lineage-node"} onClick={()=>onSelect(version)}>
-        <span className="lineage-dot">{index+1}</span>
-        <span><strong>V{version.version_number} {version.parent_version_id?"Revision":"Initial Upload"}</strong><em>{story}</em><small>{implication}</small><small>{formatDate(version.created_at)} | {version.row_count} rows / {version.column_count} columns | Parent {parentLabel(version)}</small><span className="lineage-badges">{badges.map((badge)=><Badge key={badge}>{badge}</Badge>)}</span></span>
-      </button>;
-      })}
+    <p className="eyebrow">Version Lineage</p><h2>Version graph</h2>
+    {!versions.length?<Empty>No versions are available for lineage.</Empty>:<div className="lineage-graph" role="tree">
+      {roots.map((version)=>renderNode(version,0))}
+    </div>}
+    {selectedVersion&&<div className="lineage-detail-panel">
+      <div className="row"><div><p className="eyebrow">Selected node</p><h3>V{selectedVersion.version_number} | {transitionLabel(selectedVersion, selectedDiff?.report||{})}</h3></div><Button variant="secondary compact" disabled={!selectedVersion.parent_version_id} onClick={()=>onSelect(selectedVersion)}>Compare with parent</Button></div>
+      <div className="context-list compact">
+        <div className="context-row"><strong>Parent</strong><span>{parentLabel(selectedVersion)}</span></div>
+        <div className="context-row"><strong>Fingerprint</strong><span>{shortHash(selectedVersion.fingerprint)||"Not Available"}</span></div>
+        <div className="context-row"><strong>Shape</strong><span>{selectedVersion.row_count} rows / {selectedVersion.column_count} columns</span></div>
+        <div className="context-row"><strong>Change summary</strong><span>{selectedDiff?lineageStory(selectedDiff.report||{}):"Baseline or comparison not available"}</span></div>
+      </div>
     </div>
+    }
   </Card>;
+}
+
+function transitionLabel(version, report = {}) {
+  if(!version?.parent_version_id)return "Initial registration";
+  const added=report.columns_added?.length||0;
+  const removed=report.columns_removed?.length||0;
+  const typeChanges=Object.keys(report.data_type_changes||{}).length;
+  const rowDelta=Math.abs(report.row_count_change||0);
+  const missingDelta=Math.abs(report.missing_ratio_change||0);
+  if(added&&!removed&&!typeChanges)return "Schema expansion";
+  if(removed&&!added)return "Schema reduction";
+  if(added||removed||typeChanges)return "Mixed structural update";
+  if(rowDelta>0)return "Row update";
+  if(missingDelta>0)return "Metadata-quality update";
+  return "Minimal measurable change";
 }
 
 function lineageStory(report) {
@@ -1384,7 +1542,7 @@ function ComparisonSelector({ study, selectedVersion, versions = [], compareBase
     const missing=ids.filter((id)=>!aiInterpretations[id]);
     if(!study?.id||!missing.length)return;
     setAiPathStatus("Generating semantic interpretations...");
-    Promise.all(missing.map((id)=>aiApi.semanticDiffInterpretation(study.id,id).then((result)=>[id,result]).catch((err)=>[id,{error:err.response?.data?.detail||"AI interpretation could not be generated."}]))).then((entries)=>{
+    Promise.all(missing.map((id)=>aiApi.semanticDiffInterpretation(study.id,id).then((result)=>[id,result]).catch(()=>[id,{error:aiFallbackMessage()}]))).then((entries)=>{
       if(!active)return;
       setAiInterpretations((current)=>entries.reduce((acc,[id,result])=>({...acc,[id]:result}),current));
       setAiPathStatus("");
@@ -1424,7 +1582,7 @@ function ComparisonOverview({ semantic, interpretation, exact, selectedAgainst, 
     <div className="comparison-callout">
       <div><p className="eyebrow">Overall comparison</p><h3>{selectedAgainst?`V${selectedAgainst.version_number} to V${selectedVersion.version_number}`:"Selected comparison"}</h3></div>
       <div className="lineage-badges"><Badge>SCM {metricValue(semantic.scm_score)}</Badge><Badge>DSI {metricValue(semantic.dsi_score)}</Badge></div>
-      {aiInterpretation?.content?<div className="semantic-ai-narrative"><LLMFormattedContent content={aiInterpretation.content} compact /></div>:aiInterpretation?.error?<Notice error>{aiInterpretation.error}</Notice>:<Notice>{isStored?"AI interpretation is being prepared for this semantic comparison.":"This view summarizes the measured change between the selected baseline and current version. Review the version-by-version story below to understand how the dataset evolved across each intermediate transition."}</Notice>}
+      {aiInterpretation?.content?<div className="semantic-ai-narrative"><LLMFormattedContent content={aiInterpretation.content} compact /></div>:aiInterpretation?.error?<Notice>{aiInterpretation.error}</Notice>:<Notice>{isStored?"Generating evidence interpretation...":"Measured comparison evidence is shown below."}</Notice>}
     </div>
     <details className="comparison-raw-details">
       <summary>Show measured aggregate evidence</summary>
@@ -1449,7 +1607,7 @@ function SemanticPathStep({ version, semantic, aiInterpretation }) {
       <div><h3>V{previous} to V{current}</h3><p>{version.version_notes||lineageStory(semantic.report||{})}</p></div>
       <div className="lineage-badges"><Badge>SCM {metricValue(semantic.scm_score)}</Badge><Badge>DSI {metricValue(semantic.dsi_score)}</Badge></div>
     </div>
-    {aiInterpretation?.content?<div className="semantic-ai-narrative"><LLMFormattedContent content={aiInterpretation.content} compact /></div>:aiInterpretation?.error?<Notice error>{aiInterpretation.error}</Notice>:<Notice>AI interpretation is being prepared for this semantic diff.</Notice>}
+    {aiInterpretation?.content?<div className="semantic-ai-narrative"><LLMFormattedContent content={aiInterpretation.content} compact /></div>:aiInterpretation?.error?<Notice>{aiInterpretation.error}</Notice>:<Notice>Generating evidence interpretation...</Notice>}
     <details className="comparison-raw-details">
       <summary>Show measured changes for this transition</summary>
       <div className="comparison-exact-grid">
@@ -1529,26 +1687,6 @@ function comparisonExactChanges(semantic) {
   };
 }
 
-function RiskActionPanel({ selectedVersion, onOpenDiagnosis }) {
-  const diagnosis=selectedVersion.diagnosis;
-  const mlrs=diagnosis?.mlrs_score;
-  const riskLevel=mlrs==null?"Diagnosis Pending":Number(mlrs)>=75?"High":Number(mlrs)>=40?"Medium":"Low";
-  return <Card className="version-action-card">
-    <p className="eyebrow">Diagnosis Preview</p><h2>Downstream readiness</h2>
-    {!diagnosis?<div className="stack"><Empty>MLRS and LRS will be generated during data diagnosis.</Empty><Button variant="secondary" onClick={onOpenDiagnosis}><ShieldCheck size={15}/>Go to diagnosis</Button></div>:<>
-    <div className="grid grid-3">
-      <MetricCard label="MLRS" value={metricValue(diagnosis.mlrs_score)} icon={Gauge} />
-      <MetricCard label="LRS" value={metricValue(diagnosis.lrs_score)} icon={ShieldCheck} />
-      <MetricCard label="Findings" value={diagnosis.finding_count} icon={AlertTriangle} />
-    </div>
-    <div className="context-list diagnosis-preview-list">
-      <div className="context-row"><strong>Risk Level</strong><span>{riskLevel}</span></div>
-      <div className="context-row"><strong>Recommendation</strong><span>Open diagnosis for full finding recommendations.</span></div>
-    </div>
-    </>}
-  </Card>;
-}
-
 function VersionExportActions({ study, version, semantic, onExportBundle, onLoadReport, onExecutiveSummary, reportStatus }) {
   const exportSemantic=()=>semantic&&downloadBlob(new Blob([JSON.stringify(semantic,null,2)],{type:"application/json"}),`fedrepro-v${version.version_number}-semantic-comparison.json`);
   return <Card className="version-action-card">
@@ -1571,7 +1709,6 @@ function integrityWarnings(version, profile) {
   return [
     !version.fingerprint&&"Missing fingerprint",
     !profile&&"Missing profile report",
-    !version.diagnosis&&"Missing diagnosis",
     !version.semantic_diff&&"Version has no semantic diff because it is baseline",
     version&&!profile&&"Registration completed but no analysis loaded"
   ].filter(Boolean);
@@ -1599,7 +1736,7 @@ function VersionAnalysis({ study, version, profile, timeline }) {
       setAiResult(await aiApi.explain(study.id,{explanation_type:"version_analysis",source_entity_id:version.id}));
       setAiStatus("");
     }catch(err){
-      setAiStatus(err.response?.data?.detail||"AI insight generation failed");
+      setAiStatus(aiFallbackMessage());
     }
   };
   const aiLoading=aiStatus.startsWith("Generating");
@@ -1902,7 +2039,7 @@ export function DiagnosisPanel({ study, datasets = [], version, profile, diagnos
         const result=await aiApi.diagnosisInterpretation(study.id,version.id);
         if(active){setDiagnosisReport(result);setDiagnosisReportStatus("");}
       }catch(err){
-        if(active){setDiagnosisReport(null);setDiagnosisReportStatus(err.response?.data?.detail||"Could not prepare diagnosis interpretation.");}
+        if(active){setDiagnosisReport(null);setDiagnosisReportStatus(aiFallbackMessage());}
       }
     };
     load();
@@ -2079,7 +2216,7 @@ function MetricImpactPreview({ impact }) {
 export function AIPanel({ study, version, profile, diagnosis }) {
   const [type,setType]=useState("study_description"); const [result,setResult]=useState(null); const [status,setStatus]=useState("");
   const sources={study_description:study.id,semantic_diff:version?.semantic_diff?.id,profile:profile?.id,diagnosis:diagnosis?.id};
-  const run=async()=>{setStatus("Requesting an evidence-bound explanation from Ollama…");setResult(null);try{setResult(await aiApi.explain(study.id,{explanation_type:type,source_entity_id:sources[type]}));setStatus("");}catch(err){setStatus(err.response?.data?.detail||"AI explanation failed");}};
+  const run=async()=>{setStatus("Generating evidence interpretation...");setResult(null);try{setResult(await aiApi.explain(study.id,{explanation_type:type,source_entity_id:sources[type]}));setStatus("");}catch(err){setStatus(aiFallbackMessage());}};
   return <Card className="ai-panel"><h2>Optional AI explanation</h2><p className="muted">Ollama explains persisted evidence only. It cannot calculate metrics, modify findings, or change severity.</p><div className="form-grid"><Field label="Explanation type"><select value={type} onChange={(e)=>setType(e.target.value)}><option value="study_description">Improve study description</option><option value="semantic_diff">Explain semantic change</option><option value="profile">Explain profile</option><option value="diagnosis">Explain diagnosis</option></select></Field><div className="field"><label>&nbsp;</label><Button onClick={run} disabled={!sources[type]}>Generate with Ollama</Button></div></div>{status&&<Notice error={status.includes("failed")}>{status}</Notice>}{result&&<div style={{marginTop:16}}><p className="metric-label">{result.model} · evidence {result.source_evidence_hash.slice(0,12)}</p><div className="pre">{result.content}</div></div>}</Card>;
 }
 

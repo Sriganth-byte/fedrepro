@@ -63,3 +63,20 @@ def test_version_analysis_has_complete_fallback():
     assert fallback["research_cautions"]
     assert fallback["conclusion"]
     assert fallback["generation_note"].startswith("Ollama could not")
+
+
+def test_non_structured_ai_fallback_hides_internal_error_text():
+    evidence = {
+        "scm_score": 12.5,
+        "dsi_score": 4.25,
+        "report": {
+            "columns_added": ["new_feature"],
+            "columns_removed": [],
+        },
+    }
+    fallback = AIExplanationService._fallback_interpretation("semantic_metrics", evidence)
+    assert "Interpretation temporarily unavailable" in fallback
+    assert "SCM: 12.5" in fallback
+    assert "new_feature" in fallback
+    assert "Ollama" not in fallback
+    assert "timed out" not in fallback.lower()

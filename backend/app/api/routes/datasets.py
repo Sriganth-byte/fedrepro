@@ -36,7 +36,7 @@ async def register_dataset(study_id: int, file: UploadFile = File(...), dataset_
 @router.get("/studies/{study_id}/datasets")
 def study_datasets(study_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     StudyService(db).get_owned(study_id, user.id)
-    return [dataset_payload(dataset) for dataset in DatasetRepository(db).list_for_study(study_id)]
+    return [dataset_payload(dataset, db) for dataset in DatasetRepository(db).list_for_study(study_id)]
 
 
 @router.get("/registrations/{registration_id}")
@@ -443,8 +443,35 @@ def registration_payload(item):
     return {"id": item.id, "dataset_id": item.dataset_id, "original_filename": item.original_filename, "file_size": item.file_size, "version_notes": item.version_notes, "metadata": item.metadata_json, "validation": item.validation_json, "status": item.status, "created_at": item.created_at}
 
 
-def dataset_payload(item):
-    return {"id": item.id, "study_id": item.study_id, "name": item.name, "created_at": item.created_at, "registrations": [registration_payload(row) for row in item.registrations], "versions": [{"id": row.id, "registration_id": row.registration_id, "parent_version_id": row.parent_version_id, "version_number": row.version_number, "row_count": row.row_count, "column_count": row.column_count, "file_hash": row.file_hash, "version_notes": row.version_notes, "fingerprint": None if not row.fingerprint else {"file_hash": row.fingerprint.file_hash, "schema_hash": row.fingerprint.schema_hash, "metadata_hash": row.fingerprint.metadata_hash, "combined_fingerprint": row.fingerprint.combined_fingerprint, "algorithm_version": row.fingerprint.algorithm_version}, "created_at": row.created_at} for row in item.versions]}
+def dataset_payload(item, db: Session | None = None):
+    versions = []
+    for row in item.versions:
+        configuration = db.get(DatasetConfiguration, row.configuration_id) if db else None
+        versions.append({
+            "id": row.id,
+            "registration_id": row.registration_id,
+            "parent_version_id": row.parent_version_id,
+            "version_number": row.version_number,
+            "row_count": row.row_count,
+            "column_count": row.column_count,
+            "file_hash": row.file_hash,
+            "version_notes": row.version_notes,
+            "generation_method": row.generation_method,
+            "configuration": None if not configuration else {
+                "id": configuration.id,
+                "task_type": configuration.task_type,
+                "target_column": configuration.target_column,
+                "primary_metric": configuration.primary_metric,
+                "validation_strategy": configuration.validation_strategy,
+                "feature_selection_mode": configuration.feature_selection_mode,
+                "selected_features": configuration.selected_features_json,
+                "scaling_strategy": configuration.scaling_strategy,
+                "configuration_hash": configuration.configuration_hash,
+            },
+            "fingerprint": None if not row.fingerprint else {"file_hash": row.fingerprint.file_hash, "schema_hash": row.fingerprint.schema_hash, "metadata_hash": row.fingerprint.metadata_hash, "combined_fingerprint": row.fingerprint.combined_fingerprint, "algorithm_version": row.fingerprint.algorithm_version},
+            "created_at": row.created_at,
+        })
+    return {"id": item.id, "study_id": item.study_id, "name": item.name, "created_at": item.created_at, "registrations": [registration_payload(row) for row in item.registrations], "versions": versions}
 
 
 def semantic_payload(item):
@@ -457,4 +484,4 @@ def version_bundle(db, version):
     profile_row = db.query(DatasetProfileReport).filter(DatasetProfileReport.version_id == version.id).first()
     diagnosis_row = db.query(DiagnosisReport).filter(DiagnosisReport.version_id == version.id).first()
     score_breakdown = _latest_score_breakdown(db, diagnosis_row.id) if diagnosis_row else None
-    return {"id": version.id, "dataset_id": version.dataset_id, "version_number": version.version_number, "parent_version_id": version.parent_version_id, "version_notes": version.version_notes, "file_hash": version.file_hash, "row_count": version.row_count, "column_count": version.column_count, "configuration": {"id": configuration.id, "task_type": configuration.task_type, "target_column": configuration.target_column, "primary_metric": configuration.primary_metric, "validation_strategy": configuration.validation_strategy, "feature_selection_mode": configuration.feature_selection_mode, "selected_features": configuration.selected_features_json, "scaling_strategy": configuration.scaling_strategy, "configuration_hash": configuration.configuration_hash}, "fingerprint": {"file_hash": version.fingerprint.file_hash, "schema_hash": version.fingerprint.schema_hash, "metadata_hash": version.fingerprint.metadata_hash, "combined_fingerprint": version.fingerprint.combined_fingerprint, "algorithm_version": version.fingerprint.algorithm_version}, "semantic_diff": None if not diff else semantic_payload(diff), "profile_report_id": profile_row.id if profile_row else None, "diagnosis": None if not diagnosis_row else {"id": diagnosis_row.id, "mlrs_score": diagnosis_row.mlrs_score, "lrs_score": diagnosis_row.lrs_score, "finding_count": len(diagnosis_row.findings_json), "score_breakdown": score_breakdown, "mlrs_components": (score_breakdown or {}).get("mlrs_components"), "lrs_components": (score_breakdown or {}).get("lrs_components")}, "created_at": version.created_at}
+    return {"id": version.id, "dataset_id": version.dataset_id, "version_number": version.version_number, "parent_version_id": version.parent_version_id, "version_notes": version.version_notes, "file_hash": version.file_hash, "row_count": version.row_count, "column_count": version.column_count, "generation_method": version.generation_method, "configuration": {"id": configuration.id, "task_type": configuration.task_type, "target_column": configuration.target_column, "primary_metric": configuration.primary_metric, "validation_strategy": configuration.validation_strategy, "feature_selection_mode": configuration.feature_selection_mode, "selected_features": configuration.selected_features_json, "scaling_strategy": configuration.scaling_strategy, "configuration_hash": configuration.configuration_hash}, "fingerprint": {"file_hash": version.fingerprint.file_hash, "schema_hash": version.fingerprint.schema_hash, "metadata_hash": version.fingerprint.metadata_hash, "combined_fingerprint": version.fingerprint.combined_fingerprint, "algorithm_version": version.fingerprint.algorithm_version}, "semantic_diff": None if not diff else semantic_payload(diff), "profile_report_id": profile_row.id if profile_row else None, "diagnosis": None if not diagnosis_row else {"id": diagnosis_row.id, "mlrs_score": diagnosis_row.mlrs_score, "lrs_score": diagnosis_row.lrs_score, "finding_count": len(diagnosis_row.findings_json), "score_breakdown": score_breakdown, "mlrs_components": (score_breakdown or {}).get("mlrs_components"), "lrs_components": (score_breakdown or {}).get("lrs_components")}, "created_at": version.created_at}
