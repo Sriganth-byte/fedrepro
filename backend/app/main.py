@@ -25,3 +25,16 @@ async def value_error_handler(_: Request, exc: ValueError):
 def health():
     return {"status": "ok", "service": settings.app_name, "ai_enabled": settings.ai_enabled, "ai_model": settings.ollama_model if settings.ai_enabled else None}
 
+
+def ollama_model_listing():
+    return {"object": "list", "data": [{"id": settings.ollama_model, "object": "model", "owned_by": "ollama"}]}
+
+
+@app.get("/models")
+def models():
+    return ollama_model_listing()
+
+
+@app.get("/v1/models")
+def openai_compatible_models():
+    return ollama_model_listing()

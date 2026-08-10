@@ -11,6 +11,16 @@ from app.main import app
 from app.models.entities import DatasetVersion, Study, User
 
 
+def test_ollama_model_probe_routes_do_not_404():
+    client = TestClient(app)
+    for path in ("/models", "/v1/models"):
+        response = client.get(path)
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["object"] == "list"
+        assert payload["data"][0]["id"]
+
+
 def test_complete_phase_one_api_workflow(tmp_path):
     client = TestClient(app)
     email = f"integration-{uuid4().hex}@example.com"

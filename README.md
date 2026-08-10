@@ -113,7 +113,7 @@ SECRET_KEY=<use-a-long-random-secret>
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
 CORS_ORIGINS=["http://localhost:3000","http://127.0.0.1:3000"]
 AI_ENABLED=false
-OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=llama3.1:latest
 ```
 
@@ -169,7 +169,7 @@ ollama pull llama3.1:latest
 
 ```env
 AI_ENABLED=true
-OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=llama3.1:latest
 ```
 

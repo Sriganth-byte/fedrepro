@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     max_upload_bytes: int = 100 * 1024 * 1024
     ai_enabled: bool = False
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen3:8b"
+    ollama_model: str = "llama3.1:latest"
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
