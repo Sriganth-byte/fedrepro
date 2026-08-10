@@ -17,7 +17,8 @@ def test_deterministic_analysis_contracts():
     diagnosis = DiagnosisService().diagnose(profile, semantic, {"source_version_id": 1, "version_number": 2, "version_notes": "collection update"}, config)
     assert 0 <= semantic["scm_score"] <= 100
     assert 0 <= semantic["dsi_score"] <= 100
-    assert semantic["ruleset_version"] == "semantic-1.2"
+    assert semantic["ruleset_version"] == "semantic-2.0"
+    assert semantic["report"]["metric_algorithm_versions"] == {"scm": "2.0", "dsi": "2.0"}
     assert semantic["report"]["row_content_change"]["row_instances_added"] == 3
     assert semantic["report"]["row_content_change"]["row_instances_removed"] == 2
     assert semantic["report"]["row_content_change"]["unchanged_row_instances"] == 2
@@ -35,6 +36,76 @@ def test_deterministic_analysis_contracts():
     assert diagnosis["score_breakdown"]["variant_generator_hints"]
     for finding in diagnosis["findings"]:
         assert {"issue", "severity", "evidence", "risk", "recommendation"} <= finding.keys()
+
+
+def test_identical_versions_have_zero_change_and_drift_deterministically():
+    frame = pd.DataFrame({"id": [1, 2, 3], "age": [20, 21, 22], "placed": ["no", "yes", "yes"]})
+    service = SemanticDiffService()
+    first = service.compare(frame, frame.copy(), "placed")
+    second = service.compare(frame, frame.copy(), "placed")
+    assert first == second
+    assert first["scm_score"] == 0
+    assert first["dsi_score"] == 0
+    assert first["report"]["row_content_change"]["unchanged_row_instances"] == 3
+
+
+def test_dsi_ignores_size_when_distribution_is_stable():
+    previous = pd.DataFrame({"score": [10, 20, 30, 40], "segment": ["a", "a", "b", "b"], "target": [0, 1, 0, 1]})
+    current = pd.concat([previous, previous], ignore_index=True)
+    semantic = SemanticDiffService().compare(previous, current, "target")
+    assert semantic["report"]["row_count_change"] == 4
+    assert semantic["dsi_score"] == 0
+    assert semantic["scm_score"] > 0
+
+
+def test_semantic_diff_detects_modified_rows_with_stable_identifier():
+    previous = pd.DataFrame({"EmployeeID": [1, 2, 3], "salary": [10, 20, 30], "status": ["new", "new", "old"]})
+    current = pd.DataFrame({"EmployeeID": [1, 2, 4], "salary": [10, 25, 40], "status": ["new", "new", "new"]})
+    semantic = SemanticDiffService().compare(previous, current, "status")
+    row_change = semantic["report"]["row_content_change"]
+    assert row_change["method"] == "stable_identifier_hash"
+    assert row_change["row_instances_added"] == 1
+    assert row_change["row_instances_removed"] == 1
+    assert row_change["modified_row_instances"] == 1
+
+
+def test_mlrs_improves_when_readiness_improves_even_with_high_scm():
+    bad = pd.DataFrame({"x": [1, None, None, 1000, 1000], "target": ["yes", "yes", "yes", "yes", "no"]})
+    good = pd.DataFrame({"x": [1, 2, 3, 4, 5], "target": ["yes", "no", "yes", "no", "yes"], "new_feature": [9, 8, 7, 6, 5]})
+    semantic = SemanticDiffService().compare(bad, good, "target")
+    config = {"target_column": "target"}
+    bad_profile = ProfilingService().profile(bad, "classification", config)
+    good_profile = ProfilingService().profile(good, "classification", config)
+    bad_diagnosis = DiagnosisService().diagnose(bad_profile, None, {"version_number": 1}, config)
+    good_diagnosis = DiagnosisService().diagnose(good_profile, semantic, {"source_version_id": 1, "version_number": 2, "version_notes": "cleaned"}, config)
+    assert semantic["scm_score"] > 0
+    assert good_diagnosis["mlrs_score"] < bad_diagnosis["mlrs_score"]
+    assert "drift" not in good_diagnosis["score_breakdown"]["mlrs_components"]
+
+
+def test_lrs_identifier_alone_is_low_but_direct_target_copy_is_high():
+    base_profile = {
+        "summary": {"row_count": 4, "missing_ratio": 0, "missing_cells": 0, "duplicate_ratio": 0, "duplicate_rows": 0},
+        "columns": [
+            {"name": "EmployeeID", "role": "feature", "unique_ratio": 1, "missing_ratio": 0, "missing_count": 0},
+            {"name": "placed", "role": "target", "unique_ratio": .5, "missing_ratio": 0, "missing_count": 0},
+        ],
+        "high_correlations": [],
+        "task_type": "classification",
+        "task_profile": {"class_distribution": {"yes": 2, "no": 2}, "imbalance_ratio": 1},
+    }
+    config = {"target_column": "placed"}
+    identifier_only = DiagnosisService().diagnose(base_profile, None, {"version_number": 1}, config)
+    assert identifier_only["lrs_score"] <= 8
+
+    leaking_profile = {
+        **base_profile,
+        "columns": base_profile["columns"] + [{"name": "placed_label_copy", "role": "feature", "unique_ratio": .5, "missing_ratio": 0, "missing_count": 0}],
+        "high_correlations": [{"left": "placed", "right": "placed_label_copy", "correlation": 1.0}],
+    }
+    leaking = DiagnosisService().diagnose(leaking_profile, None, {"version_number": 1}, config)
+    assert leaking["lrs_score"] > identifier_only["lrs_score"] + 20
+    assert leaking["score_breakdown"]["lrs_components"]["direct_target_leakage"] > 0
 
 
 def test_version_analysis_response_contract():

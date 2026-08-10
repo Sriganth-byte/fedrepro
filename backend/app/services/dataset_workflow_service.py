@@ -150,20 +150,5 @@ class DatasetWorkflowService:
         self.storage.delete_version_file(file_path)
 
     def refresh_semantic_report(self, report: SemanticDiffReport) -> bool:
-        if report.ruleset_version == SemanticDiffService.ruleset_version:
-            return False
-        previous = self.db.get(DatasetVersion, report.previous_version_id)
-        current = self.db.get(DatasetVersion, report.current_version_id)
-        if not previous or not current:
-            return False
-        configuration = self.db.get(DatasetConfiguration, current.configuration_id)
-        payload = SemanticDiffService().compare(
-            pd.read_csv(previous.immutable_file_path),
-            pd.read_csv(current.immutable_file_path),
-            configuration.target_column,
-        )
-        report.report_json = payload["report"]
-        report.scm_score = payload["scm_score"]
-        report.dsi_score = payload["dsi_score"]
-        report.ruleset_version = payload["ruleset_version"]
-        return True
+        # Metric reports are historical evidence; new algorithms apply to new comparisons only.
+        return False
