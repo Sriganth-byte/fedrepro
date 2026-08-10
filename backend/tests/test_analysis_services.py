@@ -151,3 +151,47 @@ def test_non_structured_ai_fallback_hides_internal_error_text():
     assert "new_feature" in fallback
     assert "Ollama" not in fallback
     assert "timed out" not in fallback.lower()
+
+
+def test_ai_fallback_content_is_retryable_not_cached_as_success():
+    structured_fallback = json.dumps({"generation_note": "Ollama could not complete a valid structured response"})
+    assert AIExplanationService.is_fallback_content(
+        "Interpretation temporarily unavailable. The persisted version evidence remains available."
+    )
+    assert AIExplanationService.is_fallback_content(structured_fallback)
+    assert not AIExplanationService.is_fallback_content("## Dataset Readiness\nThis version is ready for review.")
+
+
+def test_dataset_executive_summary_prompt_uses_compact_evidence():
+    evidence = {
+        "ml_study": {"name": "Placement Study", "ml_task": "classification"},
+        "dataset": {"name": "Placement"},
+        "selected_version": {"version_number": 3, "row_count": 100, "column_count": 10, "target_column": "placed"},
+        "dataset_profile": {
+            "summary": {"row_count": 100, "missing_cells": 4, "duplicate_rows": 0},
+            "task_profile": {"class_distribution": {"yes": 55, "no": 45}, "imbalance_ratio": 1.22},
+            "columns": [
+                {"name": f"feature_{index}", "missing_count": index, "missing_ratio": index / 100, "outlier_count": index}
+                for index in range(10)
+            ],
+        },
+        "version_history": [
+            {
+                "version_number": 3,
+                "semantic_diff_from_previous": {
+                    "scm_score": 8.5,
+                    "dsi_score": 2.0,
+                    "schema": {"columns_added": ["new_signal"], "columns_removed": []},
+                    "rows": {"previous": 90, "current": 100, "net_change": 10},
+                },
+            }
+        ],
+    }
+    prompt = AIExplanationService._prompt("dataset_executive_summary", evidence)
+    assert "detailed dataset research summary" in prompt
+    assert "ML training readiness" in prompt
+    assert "feature_9" not in prompt
+    assert "new_signal" in prompt
+    payload = AIExplanationService(None)._request_payload("dataset_executive_summary", prompt, stream=True)
+    assert payload["stream"] is True
+    assert payload["options"]["num_predict"] == 1200

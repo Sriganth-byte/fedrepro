@@ -55,6 +55,7 @@ export const datasetApi = {
   verifyRecreation: (data) => api.post("/versions/recreate/verify", data).then((r) => r.data),
   profile: (versionId) => api.get(`/versions/${versionId}/profile`).then((r) => r.data),
   diagnosis: (versionId) => api.get(`/versions/${versionId}/diagnosis`).then((r) => r.data),
+  runDiagnosis: (versionId, recompute = false) => api.post(`/versions/${versionId}/diagnosis/run`, null, { params: { recompute } }).then((r) => r.data),
   diagnosisContract: (versionId) => api.get(`/versions/${versionId}/diagnosis-contract`).then((r) => r.data),
   diagnosisReport: (versionId) => api.get(`/versions/${versionId}/diagnosis-report`, { responseType: "blob" }).then((r) => r.data)
 };
@@ -63,6 +64,41 @@ export const aiApi = {
   semanticMetrics: (studyId, diffId) => api.post(`/ai/studies/${studyId}/semantic-diffs/${diffId}/metrics-interpretation`).then((r) => r.data),
   semanticDiffInterpretation: (studyId, diffId) => api.post(`/ai/studies/${studyId}/semantic-diffs/${diffId}/interpretation`).then((r) => r.data),
   versionExecutiveSummary: (studyId, versionId) => api.post(`/ai/studies/${studyId}/versions/${versionId}/executive-summary`).then((r) => r.data),
+  versionExecutiveSummaryStream: async (studyId, versionId, onChunk) => {
+    const token = localStorage.getItem("fedrepro_token");
+    const apiOrigin = window.location.port === "3000" ? "http://127.0.0.1:8000" : "";
+    const response = await fetch(`${apiOrigin}/api/ai/studies/${studyId}/versions/${versionId}/executive-summary/stream`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (response.status === 401) {
+      localStorage.removeItem("fedrepro_token");
+      if (window.location.pathname !== "/login") window.location.assign("/login");
+      throw new Error("Unauthorized");
+    }
+    if (!response.ok) throw new Error(`Executive summary stream failed (${response.status})`);
+    const reader = response.body?.getReader();
+    if (!reader) {
+      const text = await response.text();
+      onChunk(text);
+      return text;
+    }
+    const decoder = new TextDecoder();
+    let content = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      content += chunk;
+      onChunk(chunk);
+    }
+    const tail = decoder.decode();
+    if (tail) {
+      content += tail;
+      onChunk(tail);
+    }
+    return content;
+  },
   diagnosisInterpretation: (studyId, versionId) => api.post(`/ai/studies/${studyId}/versions/${versionId}/diagnosis-interpretation`).then((r) => r.data)
 };
 export const variantApi = {
@@ -72,4 +108,3 @@ export const variantApi = {
   registerVariant: (jobId, recordId, payload) => api.post(`/variant-jobs/${jobId}/records/${recordId}/register`, payload).then((r) => r.data),
   variantTree: (versionId) => api.get(`/versions/${versionId}/variant-tree`).then((r) => r.data),
 };
-

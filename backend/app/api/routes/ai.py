@@ -1,6 +1,7 @@
 import json
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user
@@ -14,6 +15,12 @@ from app.services.study_service import StudyService
 from app.utilities.hashing import canonical_hash
 
 router = APIRouter(prefix="/ai", tags=["optional AI explanations"])
+
+
+def usable_cached_explanation(record: AIGeneratedExplanation | None) -> AIGeneratedExplanation | None:
+    if record and not AIExplanationService.is_fallback_content(record.content):
+        return record
+    return None
 
 
 @router.post("/studies/{study_id}/explain", status_code=201)
@@ -42,6 +49,7 @@ def semantic_metrics_interpretation(study_id: int, diff_id: int, db: Session = D
         AIGeneratedExplanation.source_evidence_hash == evidence_hash,
         AIGeneratedExplanation.prompt_version == AIExplanationService.prompt_version,
     ).order_by(AIGeneratedExplanation.created_at.desc()).first()
+    cached = usable_cached_explanation(cached)
     record = cached or AIExplanationService(db).explain(study, "semantic_metrics", diff_id, evidence)
     return {"id": record.id, "type": record.explanation_type, "model": record.model, "prompt_version": record.prompt_version, "source_evidence_hash": record.source_evidence_hash, "content": record.content, "created_at": record.created_at, "cached": bool(cached)}
 
@@ -58,6 +66,7 @@ def semantic_diff_interpretation(study_id: int, diff_id: int, db: Session = Depe
         AIGeneratedExplanation.source_evidence_hash == evidence_hash,
         AIGeneratedExplanation.prompt_version == AIExplanationService.prompt_version,
     ).order_by(AIGeneratedExplanation.created_at.desc()).first()
+    cached = usable_cached_explanation(cached)
     record = cached or AIExplanationService(db).explain(study, "semantic_diff_interpretation", diff_id, evidence)
     return {"id": record.id, "type": record.explanation_type, "model": record.model, "prompt_version": record.prompt_version, "source_evidence_hash": record.source_evidence_hash, "content": record.content, "created_at": record.created_at, "cached": bool(cached)}
 
@@ -74,8 +83,21 @@ def version_executive_summary(study_id: int, version_id: int, db: Session = Depe
         AIGeneratedExplanation.source_evidence_hash == evidence_hash,
         AIGeneratedExplanation.prompt_version == AIExplanationService.prompt_version,
     ).order_by(AIGeneratedExplanation.created_at.desc()).first()
+    cached = usable_cached_explanation(cached)
     record = cached or AIExplanationService(db).explain(study, "dataset_executive_summary", version_id, evidence)
     return {"id": record.id, "type": record.explanation_type, "version_id": version_id, "model": record.model, "prompt_version": record.prompt_version, "source_evidence_hash": record.source_evidence_hash, "content": record.content, "created_at": record.created_at, "cached": bool(cached)}
+
+
+@router.post("/studies/{study_id}/versions/{version_id}/executive-summary/stream")
+def version_executive_summary_stream(study_id: int, version_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    study = StudyService(db).get_owned(study_id, user.id)
+    evidence = resolve_evidence(db, study, "dataset_executive_summary", version_id)
+    stream = AIExplanationService(db).explain_stream(study, "dataset_executive_summary", version_id, evidence)
+    return StreamingResponse(
+        stream,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/studies/{study_id}/versions/{version_id}/diagnosis-interpretation", status_code=201)
@@ -91,6 +113,7 @@ def version_diagnosis_interpretation(study_id: int, version_id: int, db: Session
         AIGeneratedExplanation.source_evidence_hash == evidence_hash,
         AIGeneratedExplanation.prompt_version == AIExplanationService.prompt_version,
     ).order_by(AIGeneratedExplanation.created_at.desc()).first()
+    cached = usable_cached_explanation(cached)
     record = cached or AIExplanationService(db).explain(study, "diagnosis_report_interpretation", diagnosis_id, evidence)
     return {"id": record.id, "type": record.explanation_type, "version_id": version_id, "model": record.model, "prompt_version": record.prompt_version, "source_evidence_hash": record.source_evidence_hash, "content": record.content, "created_at": record.created_at, "cached": bool(cached)}
 

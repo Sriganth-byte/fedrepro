@@ -1,4 +1,5 @@
 import json
+from collections.abc import Iterator
 
 import httpx
 from sqlalchemy.orm import Session
@@ -9,7 +10,7 @@ from app.utilities.hashing import canonical_hash
 
 
 class AIExplanationService:
-    prompt_version = "explanation-1.8"
+    prompt_version = "explanation-2.0"
     version_analysis_schema = {
         "type": "object",
         "properties": {
@@ -36,9 +37,10 @@ class AIExplanationService:
         "required": ["executive_summary", "selected_version_profile", "version_evolution", "research_cautions", "conclusion"],
     }
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, model: str | None = None):
         self.db = db
         self.settings = get_settings()
+        self.model = model or self.settings.ollama_model
 
     def explain(self, study: Study, explanation_type: str, source_entity_id: int, evidence: dict) -> AIGeneratedExplanation:
         if not self.settings.ai_enabled:
@@ -50,30 +52,20 @@ class AIExplanationService:
             AIGeneratedExplanation.source_entity_id == source_entity_id,
             AIGeneratedExplanation.source_evidence_hash == evidence_hash,
             AIGeneratedExplanation.prompt_version == self.prompt_version,
-            AIGeneratedExplanation.model == self.settings.ollama_model,
+            AIGeneratedExplanation.model == self.model,
         ).order_by(AIGeneratedExplanation.created_at.desc()).first()
-        if cached:
+        if cached and not self.is_fallback_content(cached.content):
             return cached
         prompt = self._prompt(explanation_type, evidence)
         version_analysis = explanation_type == "version_analysis"
-        narrative_interpretation = explanation_type in {"semantic_diff_interpretation", "semantic_metrics", "dataset_executive_summary", "dataset_explanation_report"}
-        request_payload = {
-            "model": self.settings.ollama_model,
-            "prompt": prompt,
-            "stream": False,
-            "keep_alive": "10m",
-            "options": {
-                "temperature": 0.25 if narrative_interpretation else 0.1,
-                "num_predict": 4096 if version_analysis else 500,
-                **({"num_ctx": 16384} if version_analysis else {}),
-            },
-        }
+        request_payload = self._request_payload(explanation_type, prompt, stream=False)
         if version_analysis:
             request_payload["format"] = self.version_analysis_schema
         content = None
         last_error = None
-        timeout = httpx.Timeout(600 if version_analysis else 90, connect=10)
-        for _attempt in range(2):
+        timeout = self._timeout(explanation_type)
+        max_attempts = self._max_attempts(explanation_type)
+        for _attempt in range(max_attempts):
             try:
                 response = httpx.post(
                     f"{self.settings.ollama_base_url.rstrip('/')}/api/generate",
@@ -102,11 +94,98 @@ class AIExplanationService:
             "profile_report_id": source_entity_id if explanation_type == "profile" else None,
             "diagnosis_report_id": source_entity_id if explanation_type in {"diagnosis", "diagnosis_report_interpretation"} else None,
         }
-        record = AIGeneratedExplanation(study_id=study.id, explanation_type=explanation_type, source_entity_type=explanation_type, source_entity_id=source_entity_id, model=self.settings.ollama_model, prompt_version=self.prompt_version, source_evidence_hash=evidence_hash, content=content, **source_links)
+        record = AIGeneratedExplanation(study_id=study.id, explanation_type=explanation_type, source_entity_type=explanation_type, source_entity_id=source_entity_id, model=self.model, prompt_version=self.prompt_version, source_evidence_hash=evidence_hash, content=content, **source_links)
         self.db.add(record)
         self.db.commit()
         self.db.refresh(record)
         return record
+
+    def explain_stream(self, study: Study, explanation_type: str, source_entity_id: int, evidence: dict) -> Iterator[str]:
+        if not self.settings.ai_enabled:
+            raise ValueError("AI explanations are disabled")
+        evidence_hash = canonical_hash(evidence)
+        cached = self.db.query(AIGeneratedExplanation).filter(
+            AIGeneratedExplanation.study_id == study.id,
+            AIGeneratedExplanation.explanation_type == explanation_type,
+            AIGeneratedExplanation.source_entity_id == source_entity_id,
+            AIGeneratedExplanation.source_evidence_hash == evidence_hash,
+            AIGeneratedExplanation.prompt_version == self.prompt_version,
+            AIGeneratedExplanation.model == self.model,
+        ).order_by(AIGeneratedExplanation.created_at.desc()).first()
+        if cached and not self.is_fallback_content(cached.content):
+            yield cached.content
+            return
+
+        prompt = self._prompt(explanation_type, evidence)
+        request_payload = self._request_payload(explanation_type, prompt, stream=True)
+        chunks = []
+        last_error = None
+        try:
+            with httpx.stream(
+                "POST",
+                f"{self.settings.ollama_base_url.rstrip('/')}/api/generate",
+                json=request_payload,
+                timeout=self._timeout(explanation_type),
+            ) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                    payload = json.loads(line)
+                    chunk = payload.get("response", "")
+                    if chunk:
+                        chunks.append(chunk)
+                        yield chunk
+                    if payload.get("done"):
+                        break
+        except Exception as exc:
+            last_error = exc
+
+        content = "".join(chunks).strip()
+        if not content:
+            content = self._fallback_interpretation(explanation_type, evidence)
+            yield content
+
+        record = AIGeneratedExplanation(
+            study_id=study.id,
+            explanation_type=explanation_type,
+            source_entity_type=explanation_type,
+            source_entity_id=source_entity_id,
+            model=self.model,
+            prompt_version=self.prompt_version,
+            source_evidence_hash=evidence_hash,
+            content=content,
+        )
+        self.db.add(record)
+        self.db.commit()
+
+    def _request_payload(self, explanation_type: str, prompt: str, stream: bool) -> dict:
+        version_analysis = explanation_type == "version_analysis"
+        executive_summary = explanation_type == "dataset_executive_summary"
+        narrative_interpretation = explanation_type in {"semantic_diff_interpretation", "semantic_metrics", "dataset_executive_summary", "dataset_explanation_report"}
+        return {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": stream,
+            "keep_alive": "10m",
+            "options": {
+                "temperature": 0.25 if narrative_interpretation else 0.1,
+                "num_predict": 4096 if version_analysis else 1200 if executive_summary else 500,
+                **({"num_ctx": 16384} if version_analysis else {}),
+            },
+        }
+
+    @staticmethod
+    def _timeout(explanation_type: str) -> httpx.Timeout:
+        if explanation_type == "version_analysis":
+            return httpx.Timeout(600, connect=10)
+        if explanation_type == "dataset_executive_summary":
+            return httpx.Timeout(180, connect=10, read=180)
+        return httpx.Timeout(90, connect=10)
+
+    @staticmethod
+    def _max_attempts(explanation_type: str) -> int:
+        return 2 if explanation_type == "version_analysis" else 1 if explanation_type == "dataset_executive_summary" else 2
 
     @staticmethod
     def _prompt(kind: str, evidence: dict) -> str:
@@ -137,15 +216,13 @@ class AIExplanationService:
                 f"Evidence:\n{json.dumps(evidence, default=str)}"
             )
         if kind == "dataset_executive_summary":
+            evidence = AIExplanationService._compact_executive_summary_evidence(evidence)
             return (
                 "Act as a senior machine learning engineer writing a detailed dataset research summary for one immutable dataset version. "
-                "Use the ML study context, selected version identity, configuration, profile summary, semantic diff metrics, version history, and reproducibility evidence. "
-                "Return a well-formatted Markdown narrative with clear section headings. Choose section headings dynamically based on the evidence instead of using a fixed template. "
-                "Cover the most relevant available topics, such as study purpose, dataset identity, target and evaluation setup, data quality, semantic change, stability, reproducibility, ML training readiness, risks, and next research actions. "
-                "Make the explanation specific to the selected dataset version, affected columns, target values, metrics, and observed changes. "
-                "When evidence is unavailable, state what is missing and what conclusion cannot be supported yet. "
-                "Do not begin with a generic phrase, do not output JSON, and do not list raw evidence mechanically. "
-                "Use only supplied evidence. Do not invent metrics, causes, business facts, model results, model performance, or guarantees. "
+                "Return well-formatted Markdown with clear section headings. Cover study purpose, dataset identity, target/evaluation setup, "
+                "data quality, semantic version change, reproducibility, ML training readiness, risks, and next research actions. "
+                "Make the explanation specific to the selected version, affected columns, target values, metrics, and observed changes. "
+                "Do not output JSON, do not begin with a generic preface, and do not invent model results, causes, business facts, or guarantees. "
                 f"Evidence:\n{json.dumps(evidence, default=str)}"
             )
         if kind == "dataset_explanation_report":
@@ -213,6 +290,71 @@ class AIExplanationService:
             if not isinstance(item["changes"], list):
                 raise ValueError("model returned invalid transition changes")
         return parsed
+
+    @staticmethod
+    def _compact_executive_summary_evidence(evidence: dict) -> dict:
+        selected = evidence.get("selected_version") or {}
+        profile = evidence.get("dataset_profile") or {}
+        summary = profile.get("summary") or {}
+        task_profile = profile.get("task_profile") or {}
+        columns = profile.get("columns") or []
+        current_version_number = selected.get("version_number")
+        current_history = next(
+            (
+                item for item in reversed(evidence.get("version_history") or [])
+                if item.get("version_number") == current_version_number
+            ),
+            {},
+        )
+        diff = current_history.get("semantic_diff_from_previous") or {}
+        missing_columns = [
+            {"name": item.get("name"), "missing_count": item.get("missing_count"), "missing_ratio": item.get("missing_ratio")}
+            for item in columns
+            if (item.get("missing_count") or 0) > 0
+        ][:5]
+        outlier_columns = [
+            {"name": item.get("name"), "outlier_count": item.get("outlier_count")}
+            for item in columns
+            if (item.get("outlier_count") or 0) > 0
+        ][:5]
+        return {
+            "ml_study": evidence.get("ml_study"),
+            "dataset": evidence.get("dataset"),
+            "selected_version": selected,
+            "profile_summary": summary,
+            "target_profile": {
+                "class_distribution": task_profile.get("class_distribution"),
+                "imbalance_ratio": task_profile.get("imbalance_ratio"),
+            },
+            "notable_columns": {
+                "missing": missing_columns,
+                "outliers": outlier_columns,
+            },
+            "current_version_change": {
+                "scm_score": diff.get("scm_score"),
+                "dsi_score": diff.get("dsi_score"),
+                "columns_added": (diff.get("schema") or {}).get("columns_added"),
+                "columns_removed": (diff.get("schema") or {}).get("columns_removed"),
+                "rows": diff.get("rows"),
+                "missingness": diff.get("missingness"),
+                "target_distribution_change": diff.get("target_distribution_change"),
+            } if diff else None,
+        }
+
+    @staticmethod
+    def is_fallback_content(content: str | None) -> bool:
+        if not content:
+            return False
+        stripped = content.lstrip()
+        if stripped.startswith("Interpretation temporarily unavailable."):
+            return True
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(parsed, dict):
+            return False
+        return str(parsed.get("generation_note", "")).startswith("Ollama could not")
 
     @staticmethod
     def _fallback_version_analysis(evidence: dict, error: Exception) -> dict:

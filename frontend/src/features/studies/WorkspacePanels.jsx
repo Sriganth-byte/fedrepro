@@ -1009,6 +1009,7 @@ export function VersionPanel({ study, datasets, selectedVersion, profile, semant
   const compareOptions=selectedWithEvidence?versions.filter((version)=>version.id!==selectedWithEvidence.id&&version.version_number<selectedWithEvidence.version_number&&(!selectedWithEvidence.dataset_id||!version.dataset_id||version.dataset_id===selectedWithEvidence.dataset_id)):[];
   const compareBase=compareOptions.find((version)=>String(version.id)===String(compareId))||versions.find((version)=>version.id===selectedWithEvidence?.parent_version_id)||compareOptions.at(-1);
   const warnings=integrityWarnings(selectedWithEvidence, profile);
+  const executiveStreaming=executiveStatus.startsWith("Streaming");
   useEffect(()=>{
     setMetricAiResult(null);
     setMetricAiStatus("");
@@ -1041,7 +1042,7 @@ export function VersionPanel({ study, datasets, selectedVersion, profile, semant
     }
   };
   const generateMetricAi=async()=>{
-    if(!semantic?.id)return;
+    if(!semantic?.id||executiveStreaming)return;
     setMetricAiStatus("Generating SCM and DSI interpretation...");
     setMetricAiResult(null);
     try{
@@ -1053,11 +1054,19 @@ export function VersionPanel({ study, datasets, selectedVersion, profile, semant
   };
   const generateExecutiveSummary=async()=>{
     if(!selectedWithEvidence)return;
-    setExecutiveStatus("Generating dataset executive summary...");
-    setExecutiveResult(null);
+    const versionId=selectedWithEvidence.id;
+    setExecutiveStatus("Streaming dataset executive summary...");
+    setExecutiveResult({version_id:versionId,content:""});
     try{
-      setExecutiveResult(await aiApi.versionExecutiveSummary(study.id,selectedWithEvidence.id));
-      setExecutiveStatus("");
+      const content=await aiApi.versionExecutiveSummaryStream(study.id,versionId,(chunk)=>{
+        setExecutiveResult((current)=>({
+          ...(current||{}),
+          version_id:versionId,
+          content:`${current?.content||""}${chunk}`
+        }));
+      });
+      setExecutiveResult((current)=>({...current,version_id:versionId,content}));
+      setExecutiveStatus("Executive summary generated.");
     }catch(err){
       setExecutiveStatus(aiFallbackMessage());
     }
@@ -1116,12 +1125,12 @@ export function VersionPanel({ study, datasets, selectedVersion, profile, semant
     {!selectedWithEvidence?<Empty>No version selected.</Empty>:<>
       <VersionIdentityCard version={selectedWithEvidence} datasetName={selectedDatasetName} warnings={warnings} parentLabel={parentVersionLabel(selectedWithEvidence)} />
       <VersionResearchContext version={selectedWithEvidence} />
-      <div id="version-comparison-section" className="version-tab-grid"><SemanticChangeSummary semantic={semantic} selectedVersion={selectedWithEvidence} parentLabel={parentVersionLabel(selectedWithEvidence)} /><SemanticInsightCard semantic={semantic} selectedVersion={selectedWithEvidence} aiResult={metricAiResult} aiStatus={metricAiStatus} onGenerateAi={generateMetricAi} /></div>
+      <div id="version-comparison-section" className="version-tab-grid"><SemanticChangeSummary semantic={semantic} selectedVersion={selectedWithEvidence} parentLabel={parentVersionLabel(selectedWithEvidence)} /><SemanticInsightCard semantic={semantic} selectedVersion={selectedWithEvidence} aiResult={metricAiResult} aiStatus={metricAiStatus} onGenerateAi={generateMetricAi} disabled={executiveStreaming} /></div>
       <ExecutiveSummaryPanel version={selectedWithEvidence} onGenerate={generateExecutiveSummary} status={executiveStatus} result={executiveResult} />
       <ReproducibilitySnapshot version={selectedWithEvidence} parentLabel={parentVersionLabel(selectedWithEvidence)} />
       <FingerprintBreakdown version={selectedWithEvidence} focus={detailTab==="fingerprint"} />
       <LineageTimeline versions={versions} selectedVersion={selectedWithEvidence} parentLabel={parentVersionLabel} onSelect={(row)=>loadVersion(row,"lineage")} />
-      <ComparisonSelector study={study} selectedVersion={selectedWithEvidence} versions={versions} compareBase={compareBase} compareId={compareId} setCompareId={setCompareId} options={compareOptions} semantic={semantic} />
+      <ComparisonSelector study={study} selectedVersion={selectedWithEvidence} versions={versions} compareBase={compareBase} compareId={compareId} setCompareId={setCompareId} options={compareOptions} semantic={semantic} pauseAi={executiveStreaming} />
       <VersionExportActions study={study} version={selectedWithEvidence} semantic={semantic} onExportBundle={exportBundle} onLoadReport={loadEvidenceReport} onExecutiveSummary={generateExecutiveSummary} reportStatus={reportStatus||executiveStatus} />
       {detailTab==="analysis"&&profile&&<VersionAnalysis key={selectedWithEvidence.id} study={study} version={selectedWithEvidence} profile={profile} timeline={semanticHistory} />}
     </>}
@@ -1353,11 +1362,15 @@ function RecreationResult({ result }) {
 }
 
 function LineageTimeline({ versions, selectedVersion, focus, onSelect, parentLabel = (version)=>version?.parent_version_id?`V${version.parent_version_id}`:"Baseline" }) {
+  const [mode,setMode]=useState("lineage");
+  const byId=new Map(versions.map((version)=>[version.id,version]));
   const childrenByParent=versions.reduce((acc,version)=>{
     const key=version.parent_version_id||"root";
     acc[key]=[...(acc[key]||[]),version];
     return acc;
   },{});
+  const roots=(childrenByParent.root||versions.filter((version)=>!version.parent_version_id)).sort((a,b)=>a.version_number-b.version_number);
+  const selectedParent=selectedVersion?.parent_version_id?byId.get(selectedVersion.parent_version_id):null;
   const selectedDiff=selectedVersion?.semantic_diff;
   const renderNode=(version,depth=0)=>{
     const diff=version.semantic_diff;
@@ -1365,38 +1378,173 @@ function LineageTimeline({ versions, selectedVersion, focus, onSelect, parentLab
     const transition=transitionLabel(version, report);
     const significant=Number(diff?.scm_score||0)>=30||Number(diff?.dsi_score||0)>=30;
     const children=childrenByParent[version.id]||[];
-    return <div key={version.id} className="lineage-branch" style={{"--depth":depth}}>
-      <button className={`lineage-graph-node ${version.id===selectedVersion.id?"active":""} ${significant?"significant":""}`} onClick={()=>onSelect(version)} title={`V${version.version_number}, parent ${parentLabel(version)}`}>
-        <span className="lineage-node-title">V{version.version_number}</span>
-        <span>{transition}</span>
-        <small>{version.row_count} x {version.column_count} | {formatDate(version.created_at)||"Not Available"}</small>
-        <span className="lineage-badges">
-          {!version.parent_version_id&&<Badge>Baseline</Badge>}
-          {significant&&<Badge tone="medium">Significant</Badge>}
-          {diff?.scm_score!=null&&<Badge>SCM {metricValue(diff.scm_score)}</Badge>}
-          {diff?.dsi_score!=null&&<Badge>DSI {metricValue(diff.dsi_score)}</Badge>}
+    const nodeKind=lineageNodeKind(version);
+    const risk=lineageRisk(version);
+    const transformations=recordedTransformations(version, report);
+    return <div key={version.id} className="lineage-branch evolution-branch" style={{"--depth":depth}}>
+      {version.parent_version_id&&<div className={`evolution-edge ${significant?"significant":""}`}>
+        <span className="edge-arrow">-></span>
+        <span>SCM {metricValue(diff?.scm_score)}</span>
+        <span>DSI {metricValue(diff?.dsi_score)}</span>
+        {significant&&<Badge tone="medium">Significant</Badge>}
+        {transformations.slice(0,2).map((item)=><Badge key={`${version.id}-${item}`}>{item}</Badge>)}
+      </div>}
+      <button className={`lineage-graph-node evolution-node mode-${mode} ${version.id===selectedVersion?.id?"active":""} ${significant?"significant":""} ${nodeKind}`} onClick={()=>onSelect(version)} title={`V${version.version_number}, parent ${parentLabel(version)}, fingerprint ${version.fingerprint?"verified":"not available"}`}>
+        <span className="evolution-node-head">
+          <span className="lineage-node-title">V{version.version_number}</span>
+          <span className="lineage-badges">
+            <Badge tone={nodeKind==="variant"?"info":!version.parent_version_id?"low":"default"}>{lineageNodeBadge(version)}</Badge>
+            {version.fingerprint&&<Badge tone="low">Fingerprint</Badge>}
+          </span>
+        </span>
+        <span className="evolution-node-body">
+          <strong>{transition}</strong>
+          <small>{version.row_count} x {version.column_count} | {formatDate(version.created_at)||"Not Available"}</small>
+        </span>
+        <span className="evolution-node-metrics">
+          <span><em>MLRS</em>{displayMetric(risk.mlrs)}</span>
+          <span><em>LRS</em>{displayMetric(risk.lrs)}</span>
+          <span><em>Method</em>{formatGenerationMethod(version.generation_method)}</span>
+          <span><em>Hash</em>{shortHash(version.fingerprint)||"Not Available"}</span>
         </span>
       </button>
-      {!!children.length&&<div className="lineage-children">{children.sort((a,b)=>a.version_number-b.version_number).map((child)=>renderNode(child,depth+1))}</div>}
+      {!!children.length&&<div className="lineage-children evolution-children">{children.sort((a,b)=>a.version_number-b.version_number).map((child)=>renderNode(child,depth+1))}</div>}
     </div>;
   };
-  const roots=(childrenByParent.root||versions.filter((version)=>!version.parent_version_id)).sort((a,b)=>a.version_number-b.version_number);
   return <Card id="version-lineage-section" className={focus?"lineage-card focus-ring":"lineage-card"}>
-    <p className="eyebrow">Version Lineage</p><h2>Version graph</h2>
-    {!versions.length?<Empty>No versions are available for lineage.</Empty>:<div className="lineage-graph" role="tree">
+    <div className="evolution-map-head">
+      <div><p className="eyebrow">Dataset Evolution Map</p><h2>Provenance, semantic change, and risk trail</h2><span>Parent-child lineage with persisted fingerprints, SCM/DSI evidence, and recorded generation methods.</span></div>
+      <div className="evolution-mode-tabs" role="tablist" aria-label="Dataset evolution map mode">
+        {["lineage","impact","evidence"].map((item)=><button key={item} className={mode===item?"active":""} onClick={()=>setMode(item)} type="button">{item}</button>)}
+      </div>
+    </div>
+    {!versions.length?<Empty>No versions are available for lineage.</Empty>:<div className={`lineage-graph evolution-map mode-${mode}`} role="tree">
       {roots.map((version)=>renderNode(version,0))}
     </div>}
-    {selectedVersion&&<div className="lineage-detail-panel">
-      <div className="row"><div><p className="eyebrow">Selected node</p><h3>V{selectedVersion.version_number} | {transitionLabel(selectedVersion, selectedDiff?.report||{})}</h3></div><Button variant="secondary compact" disabled={!selectedVersion.parent_version_id} onClick={()=>onSelect(selectedVersion)}>Compare with parent</Button></div>
-      <div className="context-list compact">
-        <div className="context-row"><strong>Parent</strong><span>{parentLabel(selectedVersion)}</span></div>
-        <div className="context-row"><strong>Fingerprint</strong><span>{shortHash(selectedVersion.fingerprint)||"Not Available"}</span></div>
-        <div className="context-row"><strong>Shape</strong><span>{selectedVersion.row_count} rows / {selectedVersion.column_count} columns</span></div>
-        <div className="context-row"><strong>Change summary</strong><span>{selectedDiff?lineageStory(selectedDiff.report||{}):"Baseline or comparison not available"}</span></div>
-      </div>
+    {selectedVersion&&<div className="lineage-detail-panel evolution-detail-panel">
+      <div className="row"><div><p className="eyebrow">Selected-version comparison</p><h3>{selectedParent?`V${selectedParent.version_number} -> V${selectedVersion.version_number}`:`Baseline -> V${selectedVersion.version_number}`}</h3></div><Button variant="secondary compact" disabled={!selectedVersion.parent_version_id} onClick={()=>onSelect(selectedVersion)}>Open selected version</Button></div>
+      <EvolutionStory selectedVersion={selectedVersion} parent={selectedParent} diff={selectedDiff} />
+      <EvolutionComparison parent={selectedParent} selected={selectedVersion} diff={selectedDiff} />
+      <EvolutionEvidenceDetails selected={selectedVersion} parent={selectedParent} diff={selectedDiff} parentLabel={parentLabel(selectedVersion)} />
     </div>
     }
   </Card>;
+}
+
+function lineageNodeKind(version) {
+  if(!version.parent_version_id)return "baseline";
+  return version.generation_method&&version.generation_method!=="manual"?"variant":"revision";
+}
+
+function lineageNodeBadge(version) {
+  const kind=lineageNodeKind(version);
+  if(kind==="baseline")return "Baseline";
+  if(kind==="variant")return "Variant";
+  return "Revision";
+}
+
+function formatGenerationMethod(method) {
+  return method ? String(method).replaceAll("_"," ") : "manual";
+}
+
+function displayMetric(value, fallback = "Not Available") {
+  return value==null?fallback:metricValue(value);
+}
+
+function lineageRisk(version) {
+  return {
+    mlrs: version.mlrs_score??version.diagnosis?.mlrs_score??version.diagnosis_report?.mlrs_score,
+    lrs: version.lrs_score??version.diagnosis?.lrs_score??version.diagnosis_report?.lrs_score,
+  };
+}
+
+function selectedMissingValue(version) {
+  return version?.missing_cells??version?.profile?.summary?.missing_cells??version?.profile_report?.summary?.missing_cells;
+}
+
+function selectedDuplicateValue(version) {
+  return version?.duplicate_rows??version?.profile?.summary?.duplicate_rows??version?.profile_report?.summary?.duplicate_rows;
+}
+
+function recordedTransformations(version, report = {}) {
+  const labels=[];
+  const method=String(version.generation_method||"").toLowerCase();
+  const notes=String(version.version_notes||"").toLowerCase();
+  const text=`${method} ${notes}`;
+  if(method&&method!=="manual")labels.push(formatGenerationMethod(method));
+  if(/duplicate/.test(text)||report.duplicate_rows?.delta<0)labels.push("Duplicate Removal");
+  if(/missing|imput/.test(text)||Object.keys(report.missingness_changes_by_column||{}).length)labels.push("Missing Value Handling");
+  if(/feature|select|reduction|drop/.test(text)||report.columns_removed?.length)labels.push("Feature Reduction");
+  if(report.columns_added?.length)labels.push("Feature Addition");
+  return [...new Set(labels)];
+}
+
+function EvolutionStory({ selectedVersion, parent, diff }) {
+  const transforms=recordedTransformations(selectedVersion, diff?.report||{});
+  const start=parent?`V${parent.version_number}`:"Baseline";
+  const steps=[start,...transforms,`V${selectedVersion.version_number}`];
+  return <div className="evolution-story" aria-label="Visual change story">
+    {steps.map((step,index)=><span key={`${step}-${index}`} className={index===0||index===steps.length-1?"endpoint":""}>{step}</span>)}
+  </div>;
+}
+
+function EvolutionComparison({ parent, selected, diff }) {
+  const parentRisk=parent?lineageRisk(parent):{};
+  const selectedRisk=lineageRisk(selected);
+  const report=diff?.report||{};
+  const rows=[
+    evolutionComparisonRow("Rows", parent?.row_count, selected.row_count, "lower-neutral"),
+    evolutionComparisonRow("Columns/features", parent?.column_count, selected.column_count, "lower-neutral"),
+    evolutionComparisonRow("Missing values", selectedMissingValue(parent), selectedMissingValue(selected), "lower-better", report.missing_ratio_change),
+    evolutionComparisonRow("Duplicates", selectedDuplicateValue(parent), selectedDuplicateValue(selected), "lower-better", report.duplicate_rows?.delta),
+    evolutionComparisonRow("MLRS", parentRisk.mlrs, selectedRisk.mlrs, "lower-better"),
+    evolutionComparisonRow("LRS", parentRisk.lrs, selectedRisk.lrs, "lower-better"),
+    evolutionComparisonRow("SCM", null, diff?.scm_score, "lower-better"),
+    evolutionComparisonRow("DSI", null, diff?.dsi_score, "lower-better"),
+  ];
+  return <div className="evolution-comparison-grid">
+    {rows.map((row)=><article key={row.label} className={`evolution-change ${row.tone}`}>
+      <strong>{row.label}</strong>
+      <span>{row.before} -> {row.after}</span>
+      <em>{row.delta}</em>
+      <Badge tone={row.badgeTone}>{row.meaning}</Badge>
+    </article>)}
+  </div>;
+}
+
+function evolutionComparisonRow(label, beforeValue, afterValue, mode, explicitDelta = null) {
+  const before=beforeValue==null?"Not Available":metricValue(beforeValue);
+  const after=afterValue==null?"Not Available":metricValue(afterValue);
+  const numericBefore=Number(beforeValue);
+  const numericAfter=Number(afterValue);
+  const numericDelta=explicitDelta!=null?Number(explicitDelta):(Number.isFinite(numericBefore)&&Number.isFinite(numericAfter)?numericAfter-numericBefore:null);
+  const direction=numericDelta==null||!Number.isFinite(numericDelta)?"flat":numericDelta>0?"up":numericDelta<0?"down":"flat";
+  const riskier=mode==="lower-better"&&direction==="up";
+  const improved=mode==="lower-better"&&direction==="down";
+  const meaning=improved?"Improved":riskier?"Increased risk":direction==="flat"?"Stable":"Changed";
+  return {
+    label,
+    before,
+    after,
+    delta:numericDelta==null||!Number.isFinite(numericDelta)?"Delta unavailable":`${numericDelta>0?"+":""}${metricValue(numericDelta)}`,
+    tone:improved?"improved":riskier?"riskier":"neutral",
+    badgeTone:improved?"low":riskier?"medium":"default",
+    meaning,
+  };
+}
+
+function EvolutionEvidenceDetails({ selected, parent, diff, parentLabel }) {
+  return <div className="evolution-evidence-grid">
+    <VersionState label="Parent version" value={parent?`V${parent.version_number}`:parentLabel||"Baseline"} />
+    <VersionState label="Combined fingerprint" value={shortHash(selected.fingerprint)||"Not Available"} mono />
+    <VersionState label="Fingerprint verification" value={selected.fingerprint?"Verified":"Not Available"} />
+    <VersionState label="Generation method" value={formatGenerationMethod(selected.generation_method)} />
+    <VersionState label="Profile availability" value={selected.profile_report_id||selected.profile?"Available":"Not Available"} />
+    <VersionState label="Diagnosis availability" value={selected.diagnosis||selected.diagnosis_report_id||lineageRisk(selected).mlrs!=null?"Available":"Not Available"} />
+    <VersionState label="SCM" value={displayMetric(diff?.scm_score)} />
+    <VersionState label="DSI" value={displayMetric(diff?.dsi_score)} />
+    <VersionState label="Created" value={formatDate(selected.created_at)||"Not Available"} />
+  </div>;
 }
 
 function transitionLabel(version, report = {}) {
@@ -1480,7 +1628,7 @@ function SemanticChangeSummary({ semantic, selectedVersion, parentLabel = "Basel
   </Card>;
 }
 
-function SemanticInsightCard({ semantic, selectedVersion, aiResult, aiStatus, onGenerateAi }) {
+function SemanticInsightCard({ semantic, selectedVersion, aiResult, aiStatus, onGenerateAi, disabled = false }) {
   const hasScores=semantic&&semantic.scm_score!=null&&semantic.dsi_score!=null;
   return <Card className="ai-evidence-card semantic-ai-card">
     <p className="eyebrow">Evidence-bound AI insight</p><h2>SCM and DSI interpretation</h2>
@@ -1488,7 +1636,7 @@ function SemanticInsightCard({ semantic, selectedVersion, aiResult, aiStatus, on
       <div className="context-row"><strong>SCM</strong><span>{metricValue(semantic.scm_score)}</span></div>
       <div className="context-row"><strong>DSI</strong><span>{metricValue(semantic.dsi_score)}</span></div>
     </div>}
-    <Button variant="secondary" disabled={!semantic?.id} onClick={onGenerateAi}><Sparkles size={15}/>Generate AI interpretation</Button>
+    <Button variant="secondary" disabled={!semantic?.id||disabled} onClick={onGenerateAi}><Sparkles size={15}/>Generate AI interpretation</Button>
     {aiStatus&&<Notice error={aiStatus.includes("failed")||aiStatus.includes("Could not")}>{aiStatus}</Notice>}
     {aiResult&&<LLMFormattedContent content={aiResult.content} compact />}
   </Card>;
@@ -1510,7 +1658,7 @@ function MiniEvidenceList({ title, rows }) {
   return <div className="mini-evidence-list"><h3>{title}</h3>{rows.map(([label,value])=><div key={`${title}-${label}`}><strong>{label}</strong><span>{value}</span></div>)}</div>;
 }
 
-function ComparisonSelector({ study, selectedVersion, versions = [], compareBase, compareId, setCompareId, options, semantic, focus }) {
+function ComparisonSelector({ study, selectedVersion, versions = [], compareBase, compareId, setCompareId, options, semantic, focus, pauseAi = false }) {
   const [comparison,setComparison]=useState(null);
   const [status,setStatus]=useState("");
   const [aiInterpretations,setAiInterpretations]=useState({});
@@ -1537,18 +1685,8 @@ function ComparisonSelector({ study, selectedVersion, versions = [], compareBase
     return ()=>{active=false;};
   },[selectedVersion?.id,selectedAgainstId]);
   useEffect(()=>{
-    let active=true;
-    const ids=[...new Set([activeSemantic?.id,...pathComparisons.map(({semantic})=>semantic?.id)].filter(Boolean))];
-    const missing=ids.filter((id)=>!aiInterpretations[id]);
-    if(!study?.id||!missing.length)return;
-    setAiPathStatus("Generating semantic interpretations...");
-    Promise.all(missing.map((id)=>aiApi.semanticDiffInterpretation(study.id,id).then((result)=>[id,result]).catch(()=>[id,{error:aiFallbackMessage()}]))).then((entries)=>{
-      if(!active)return;
-      setAiInterpretations((current)=>entries.reduce((acc,[id,result])=>({...acc,[id]:result}),current));
-      setAiPathStatus("");
-    });
-    return ()=>{active=false;};
-  },[study?.id,activeSemantic?.id,pathComparisons.map(({semantic})=>semantic?.id).filter(Boolean).join(",")]);
+    setAiPathStatus("");
+  },[study?.id,activeSemantic?.id,pathComparisons.map(({semantic})=>semantic?.id).filter(Boolean).join(","),pauseAi]);
   const interpretation=activeSemantic?comparisonInterpretation(activeSemantic):null;
   const exact=activeSemantic?comparisonExactChanges(activeSemantic):null;
   const pathLabel=selectedAgainst?`V${selectedAgainst.version_number} -> ${pathVersions.map((version)=>`V${version.version_number}`).join(" -> ")}`:"";
@@ -1582,7 +1720,7 @@ function ComparisonOverview({ semantic, interpretation, exact, selectedAgainst, 
     <div className="comparison-callout">
       <div><p className="eyebrow">Overall comparison</p><h3>{selectedAgainst?`V${selectedAgainst.version_number} to V${selectedVersion.version_number}`:"Selected comparison"}</h3></div>
       <div className="lineage-badges"><Badge>SCM {metricValue(semantic.scm_score)}</Badge><Badge>DSI {metricValue(semantic.dsi_score)}</Badge></div>
-      {aiInterpretation?.content?<div className="semantic-ai-narrative"><LLMFormattedContent content={aiInterpretation.content} compact /></div>:aiInterpretation?.error?<Notice>{aiInterpretation.error}</Notice>:<Notice>{isStored?"Generating evidence interpretation...":"Measured comparison evidence is shown below."}</Notice>}
+      {aiInterpretation?.content?<div className="semantic-ai-narrative"><LLMFormattedContent content={aiInterpretation.content} compact /></div>:aiInterpretation?.error?<Notice>{aiInterpretation.error}</Notice>:<Notice>Measured comparison evidence is shown below.</Notice>}
     </div>
     <details className="comparison-raw-details">
       <summary>Show measured aggregate evidence</summary>
@@ -1607,7 +1745,7 @@ function SemanticPathStep({ version, semantic, aiInterpretation }) {
       <div><h3>V{previous} to V{current}</h3><p>{version.version_notes||lineageStory(semantic.report||{})}</p></div>
       <div className="lineage-badges"><Badge>SCM {metricValue(semantic.scm_score)}</Badge><Badge>DSI {metricValue(semantic.dsi_score)}</Badge></div>
     </div>
-    {aiInterpretation?.content?<div className="semantic-ai-narrative"><LLMFormattedContent content={aiInterpretation.content} compact /></div>:aiInterpretation?.error?<Notice>{aiInterpretation.error}</Notice>:<Notice>Generating evidence interpretation...</Notice>}
+    {aiInterpretation?.content?<div className="semantic-ai-narrative"><LLMFormattedContent content={aiInterpretation.content} compact /></div>:aiInterpretation?.error?<Notice>{aiInterpretation.error}</Notice>:<Notice>Measured transition evidence is shown below.</Notice>}
     <details className="comparison-raw-details">
       <summary>Show measured changes for this transition</summary>
       <div className="comparison-exact-grid">
@@ -1889,7 +2027,7 @@ const signedPct=(value)=>`${Number(value)>0?"+":""}${(Number(value||0)*100).toFi
 const adaptiveLevel=(score)=>Number(score)<.1?"negligible":Number(score)<1?"minor":Number(score)<5?"moderate":"major";
 const levelTone=(level)=>level==="major"?"high":level==="moderate"?"medium":"low";
 
-function DiagnosisVersionSelector({ datasets = [], version, onVersion, status, setStatus }) {
+function DiagnosisVersionSelector({ datasets = [], version, onVersion, status, setStatus, transientStatus = null }) {
   const datasetsWithVersions=datasets.filter((dataset)=>dataset.versions?.length);
   const [selectedDatasetId,setSelectedDatasetId]=useState(version?.dataset_id?String(version.dataset_id):String(datasetsWithVersions[0]?.id||""));
   useEffect(()=>{
@@ -1918,6 +2056,19 @@ function DiagnosisVersionSelector({ datasets = [], version, onVersion, status, s
     {!datasetsWithVersions.length?<Empty>No configured dataset versions are available for diagnosis.</Empty>:<div className="form-grid">
       <Field label="Dataset"><select value={selectedDatasetId} onChange={(event)=>setSelectedDatasetId(event.target.value)}>{datasetsWithVersions.map((dataset)=><option key={dataset.id} value={dataset.id}>{dataset.name}</option>)}</select></Field>
       <Field label="Version"><select value={selectedVersionId} onChange={chooseVersion}><option value="">Select version</option>{versionOptions.map((item)=><option key={item.id} value={item.id}>V{item.version_number} - {item.row_count} rows, {item.column_count} columns</option>)}</select></Field>
+    </div>}
+    {!!versionOptions.length&&<div className="diagnosis-version-status-list">
+      {versionOptions.map((item)=><button type="button" key={item.id} className={version?.id===item.id?"active":""} onClick={()=>onVersion(item.id)}>
+        {(()=>{
+          const shownStatus = version?.id===item.id && transientStatus ? transientStatus : item.diagnosis_status || "Not Diagnosed";
+          return <>
+        <strong>V{item.version_number}</strong>
+        <span>{formatGenerationMethod(item.generation_method)}</span>
+        <Badge tone={shownStatus==="Diagnosed"?"success":shownStatus==="Recompute Available"||shownStatus==="Running"?"warning":shownStatus==="Failed"?"critical":"neutral"}>{shownStatus}</Badge>
+        <em>MLRS {displayMetric(item.diagnosis?.mlrs_score, "N/A")} - LRS {displayMetric(item.diagnosis?.lrs_score, "N/A")}</em>
+          </>;
+        })()}
+      </button>)}
     </div>}
     {status&&<Notice error={status.includes("Could not")}>{status}</Notice>}
   </Card>;
@@ -2008,7 +2159,737 @@ function DiagnosisLLMReport({ report, status }) {
   </Card>;
 }
 
-export function DiagnosisPanel({ study, datasets = [], version, profile, diagnosis, initialContract = null, onVersion, onOpenVariants }) {
+function riskTone(score) {
+  const value = Number(score);
+  if (!Number.isFinite(value)) return "neutral";
+  if (value >= 70) return "critical";
+  if (value >= 45) return "high";
+  if (value >= 20) return "medium";
+  return "low";
+}
+
+function compactPct(value) {
+  return value === null || value === undefined ? "N/A" : pct(value);
+}
+
+function methodLabel(version) {
+  return formatGenerationMethod(version?.generation_method || "manual");
+}
+
+function DetailDrawer({ detail, onClose }) {
+  if (!detail) return null;
+  const hasRaw=detail.raw !== undefined;
+  return <section className="diagnosis-drawer-backdrop diagnosis-detail-layer" role="presentation">
+    <aside className="diagnosis-drawer diagnosis-detail-workspace" role="dialog" aria-modal="false" aria-labelledby="diagnosis-detail-title">
+      <div className="diagnosis-drawer-head">
+        <div>
+          <p className="eyebrow">{detail.eyebrow || "Evidence detail"}</p>
+          <h2 id="diagnosis-detail-title">{detail.title}</h2>
+          {detail.subtitle && <p className="muted">{detail.subtitle}</p>}
+        </div>
+        <Button variant="secondary compact" onClick={onClose}>Close</Button>
+      </div>
+      <nav className="diagnosis-detail-nav" aria-label="Detail sections">
+        <a href="#diagnosis-detail-summary">Summary</a>
+        <a href="#diagnosis-detail-evidence">Evidence</a>
+        {hasRaw&&<a href="#diagnosis-detail-advanced">Advanced</a>}
+      </nav>
+      <div id="diagnosis-detail-summary" className="diagnosis-detail-summary">
+        <strong>{detail.title}</strong>
+        <span>{detail.subtitle || detail.eyebrow || "Persisted evidence detail"}</span>
+      </div>
+      <div id="diagnosis-detail-evidence" className="diagnosis-drawer-body">{detail.body}</div>
+      {hasRaw && <details id="diagnosis-detail-advanced" className="debug-disclosure">
+        <summary>Advanced evidence</summary>
+        <pre className="pre">{JSON.stringify(detail.raw, null, 2)}</pre>
+      </details>}
+    </aside>
+  </section>;
+}
+
+function SmartCard({ icon: Icon, label, value, note, tone = "neutral", onClick, children }) {
+  const Tag=onClick?"button":"article";
+  return <Tag type={onClick?"button":undefined} className={`smart-card ${tone} ${onClick?"interactive":""}`} onClick={onClick}>
+    <div className="smart-card-top">
+      <span>{Icon && <Icon size={15} />}</span>
+      <strong>{label}</strong>
+    </div>
+    <div className="smart-card-value">{value ?? "N/A"}</div>
+    {note && <p>{note}</p>}
+    {children}
+  </Tag>;
+}
+
+function RiskGauge({ value, label, tone = "medium", onClick }) {
+  const score = Number(value);
+  const safe = Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : 0;
+  return <button type="button" className={`risk-gauge ${tone}`} onClick={onClick} style={{ "--risk-value": `${safe * 3.6}deg` }}>
+    <span className="risk-gauge-ring"><strong>{Number.isFinite(score) ? score.toFixed(1) : "N/A"}</strong></span>
+    <span>{label}</span>
+  </button>;
+}
+
+function MiniBar({ label, value, max = 100, tone = "medium", onClick }) {
+  const numeric = Number(value);
+  const width = Number.isFinite(numeric) ? Math.max(0, Math.min(100, (numeric / Math.max(Number(max) || 1, 1)) * 100)) : 0;
+  const Tag = onClick ? "button" : "div";
+  return <Tag type={onClick ? "button" : undefined} className={`mini-bar-row ${tone}`} onClick={onClick}>
+    <span>{label}</span>
+    <div><i style={{ width: `${width}%` }} /></div>
+    <strong>{Number.isFinite(numeric) ? metricValue(numeric) : value ?? "N/A"}</strong>
+  </Tag>;
+}
+
+function ClassDistributionBars({ distribution = {}, onClick }) {
+  const entries = Object.entries(distribution || {});
+  const total = entries.reduce((sum, [,value])=>sum + Number(value || 0), 0);
+  if (!entries.length) return <p className="muted compact-copy">No class distribution evidence.</p>;
+  return <div className="class-bars">
+    {entries.map(([label, value]) => <MiniBar key={label} label={label} value={Number(value)} max={total || 1} tone="low" onClick={onClick} />)}
+  </div>;
+}
+
+function SeverityStrip({ findings = [], onClick }) {
+  const counts = findings.reduce((acc,item)=>({...acc,[item.severity]:(acc[item.severity]||0)+1}),{});
+  return <div className="severity-strip">
+    {["critical","high","medium","low"].map((key)=><button type="button" key={key} className={`severity-chip ${key}`} onClick={onClick}><strong>{counts[key]||0}</strong><span>{key}</span></button>)}
+  </div>;
+}
+
+function RiskHeatmap({ findings = [], contract, onInspect }) {
+  const impacts = contract?.column_impact || [];
+  if (impacts.length) return <div className="risk-heatmap">
+    {impacts.map((row)=><button type="button" key={row.column} className="risk-heatmap-row" onClick={()=>onInspect({title: row.column, eyebrow: "Risk map", raw: row, body: <MiniEvidenceList title="Column impact" rows={[
+      ["Role", row.role], ["Type", row.data_type], ["Risks", row.risk_families?.join(", ") || "None"], ["Recommended ops", row.recommended_operation_count]
+    ]} />})}>
+      <strong>{row.column}</strong>
+      <span>{row.role}</span>
+      <div>{["missingness","duplicates","outliers","correlation","leakage","imbalance"].map((risk)=><i key={risk} className={row.risk_families?.some((item)=>String(item).toLowerCase().includes(risk)) ? "active" : ""} title={risk} />)}</div>
+    </button>)}
+  </div>;
+  const affected = [...new Set(findings.flatMap((finding)=>DiagnosisFindingColumns(finding)))];
+  if (!affected.length) return <Empty>No feature-level risk map is available.</Empty>;
+  return <div className="risk-heatmap">
+    {affected.map((column)=><button type="button" key={column} className="risk-heatmap-row" onClick={()=>onInspect({title: column, eyebrow: "Risk map", body: <MiniEvidenceList title="Related findings" rows={findings.filter((finding)=>DiagnosisFindingColumns(finding).includes(column)).map((finding)=>[finding.code, finding.severity])} />})}>
+      <strong>{column}</strong>
+      <span>feature</span>
+      <div>{findings.map((finding)=><i key={finding.code} className={DiagnosisFindingColumns(finding).includes(column) ? "active" : ""} title={finding.code} />)}</div>
+    </button>)}
+  </div>;
+}
+
+function RiskMapTable({ rows = [], onOpen }) {
+  const [sortKey,setSortKey]=useState("column");
+  const [sortDir,setSortDir]=useState("asc");
+  if(!rows.length)return <Empty>No feature-level risk map is available.</Empty>;
+  const sort=(key)=>{
+    if(sortKey===key)setSortDir((dir)=>dir==="asc"?"desc":"asc");
+    else{setSortKey(key);setSortDir("asc");}
+  };
+  const sorted=[...rows].sort((a,b)=>{
+    const left=sortKey==="riskCount"?(a.risks?.length||0):(a[sortKey]||"");
+    const right=sortKey==="riskCount"?(b.risks?.length||0):(b[sortKey]||"");
+    const result=String(left).localeCompare(String(right),undefined,{numeric:true});
+    return sortDir==="asc"?result:-result;
+  });
+  return <div className="table-wrap risk-map-table"><table><thead><tr>
+    {[["column","Feature"],["role","Role"],["riskCount","Risk count"],["risks","Risks"]].map(([key,label])=><th key={key} onClick={()=>sort(key)}><span>{label}{sortKey===key?` ${sortDir==="asc"?"up":"down"}`:""}</span></th>)}
+  </tr></thead><tbody>{sorted.map((row,index)=><tr key={`${row.column}-${index}`} tabIndex={0} onClick={()=>onOpen(row)} onKeyDown={(event)=>event.key==="Enter"&&onOpen(row)}>
+    <td>{row.column}</td><td>{row.role}</td><td>{row.risks?.length||0}</td><td>{row.risks?.join(", ")||"None"}</td>
+  </tr>)}</tbody></table></div>;
+}
+
+function diagnosisVersionInfo(item, activeVersionId = null, transientStatus = null) {
+  const active=String(activeVersionId||"")===String(item.id);
+  const shownStatus=active&&transientStatus?transientStatus:item.diagnosis_status||"Not Diagnosed";
+  return {
+    shownStatus,
+    tone:shownStatus==="Diagnosed"?"success":shownStatus==="Recompute Available"||shownStatus==="Running"?"warning":shownStatus==="Failed"?"critical":"neutral",
+    label:`V${item.version_number} - ${formatGenerationMethod(item.generation_method)} - ${shownStatus} - MLRS ${displayMetric(item.diagnosis?.mlrs_score, "N/A")} - LRS ${displayMetric(item.diagnosis?.lrs_score, "N/A")}`
+  };
+}
+
+export function DiagnosisPanel({ study, datasets = [], version, profile, diagnosis, initialContract = null, versionStatus = "", onVersion, onOpenVariants }) {
+  const [contract,setContract]=useState(initialContract);
+  const [status,setStatus]=useState("");
+  const [diagnosisReport,setDiagnosisReport]=useState(null);
+  const [diagnosisReportStatus,setDiagnosisReportStatus]=useState("");
+  const [selectedOptions,setSelectedOptions]=useState([]);
+  const [detail,setDetail]=useState(null);
+  const [running,setRunning]=useState(false);
+  const [riskFilter,setRiskFilter]=useState("all");
+  const [mapMode,setMapMode]=useState("visual");
+  const datasetsWithVersions=datasets.filter((dataset)=>dataset.versions?.length);
+  const [selectedDatasetId,setSelectedDatasetId]=useState(version?.dataset_id?String(version.dataset_id):String(datasetsWithVersions[0]?.id||""));
+  const activeDataset=datasetsWithVersions.find((dataset)=>String(dataset.id)===String(selectedDatasetId))||datasetsWithVersions[0];
+  const versionOptions=(activeDataset?.versions||[]).slice().sort((a,b)=>a.version_number-b.version_number);
+  const selectedVersionId=version&&String(version.dataset_id)===String(activeDataset?.id)?String(version.id):"";
+  useEffect(()=>{
+    let active=true;
+    const load=async()=>{
+      if(!version?.id||!diagnosis){setContract(null);return;}
+      if(initialContract?.header?.version_id===version.id){setContract(initialContract);setSelectedOptions(initialContract.intervention_options.map((item)=>item.id));setStatus("");return;}
+      setStatus("Loading diagnosis contract...");
+      try{
+        const result=await datasetApi.diagnosisContract(version.id);
+        if(active){setContract(result);setSelectedOptions(result.intervention_options.map((item)=>item.id));setStatus("");}
+      }catch(err){
+        if(active){setContract(null);setStatus(err.response?.data?.detail||"Could not load diagnosis contract.");}
+      }
+    };
+    load();
+    return()=>{active=false;};
+  },[version?.id,diagnosis?.id,initialContract?.header?.version_id]);
+  useEffect(()=>{
+    let active=true;
+    const load=async()=>{
+      if(!version?.id||!diagnosis?.id){setDiagnosisReport(null);setDiagnosisReportStatus("");return;}
+      setDiagnosisReportStatus("Preparing stored diagnosis interpretation...");
+      try{
+        const result=await aiApi.diagnosisInterpretation(study.id,version.id);
+        if(active){setDiagnosisReport(result);setDiagnosisReportStatus("");}
+      }catch(err){
+        if(active){setDiagnosisReport(null);setDiagnosisReportStatus(aiFallbackMessage());}
+      }
+    };
+    load();
+    return()=>{active=false;};
+  },[study.id,version?.id,diagnosis?.id]);
+  useEffect(()=>{
+    if(version?.dataset_id){
+      setSelectedDatasetId(String(version.dataset_id));
+    }else if(!selectedDatasetId&&datasetsWithVersions[0]){
+      setSelectedDatasetId(String(datasetsWithVersions[0].id));
+    }
+  },[version?.dataset_id,selectedDatasetId,datasetsWithVersions.length]);
+
+  const selectorStatus=running?"Running":status.includes("failed")?"Failed":null;
+  const runDiagnosis=async(recompute=false)=>{
+    if(!version?.id)return;
+    setRunning(true);
+    setStatus(recompute?"Recomputing diagnosis...":"Running diagnosis...");
+    try{
+      await datasetApi.runDiagnosis(version.id,recompute);
+      await onVersion(version.id);
+      setStatus(recompute?"Diagnosis recomputed.":"Diagnosis complete.");
+    }catch(err){
+      setStatus(err.response?.data?.detail||"Diagnosis run failed.");
+    }finally{
+      setRunning(false);
+    }
+  };
+
+  const chooseDataset=(event)=>setSelectedDatasetId(event.target.value);
+  const chooseVersion=async(event)=>{
+    const id=event.target.value;
+    if(!id)return;
+    setStatus("Loading selected diagnosis version...");
+    try{
+      await onVersion(id);
+      setStatus("");
+    }catch(err){
+      setStatus(err.response?.data?.detail||"Could not load selected diagnosis version.");
+    }
+  };
+  const versionStatusList=!!versionOptions.length&&<div className="diagnosis-version-status-list">
+    {versionOptions.map((item)=>{
+      const info=diagnosisVersionInfo(item, version?.id, selectorStatus);
+      return <button type="button" key={item.id} className={String(version?.id||"")===String(item.id)?"active":""} onClick={()=>onVersion(item.id)}>
+        <strong>V{item.version_number}</strong>
+        <span>{formatGenerationMethod(item.generation_method)}</span>
+        <Badge tone={info.tone}>{info.shownStatus}</Badge>
+        <em>MLRS {displayMetric(item.diagnosis?.mlrs_score, "N/A")} - LRS {displayMetric(item.diagnosis?.lrs_score, "N/A")} - {item.row_count ?? "N/A"} rows</em>
+      </button>;
+    })}
+  </div>;
+
+  if(!version)return <div className="diagnosis-console">
+    <div className="diagnosis-context-bar">
+      <Field label="Dataset"><select value={activeDataset?.id||""} onChange={chooseDataset}>{datasetsWithVersions.map((dataset)=><option key={dataset.id} value={dataset.id}>{dataset.name}</option>)}</select></Field>
+      <Field label="Version"><select value="" onChange={chooseVersion}><option value="">Select version</option>{versionOptions.map((item)=><option key={item.id} value={item.id}>{diagnosisVersionInfo(item).label}</option>)}</select></Field>
+      <span className="context-kind">{versionOptions.length?`${versionOptions.length} versions`:"No versions"}</span>
+      <Badge tone="neutral">Not Diagnosed</Badge>
+    </div>
+    {versionStatusList}
+    <Empty>{datasetsWithVersions.length?"Select a dataset version to inspect diagnosis evidence.":"No dataset versions are available for diagnosis."}</Empty>
+  </div>;
+
+  const summary=profile?.report?.summary||{};
+  const columns=profile?.report?.columns||[];
+  const task=profile?.report?.task_profile||{};
+  const highCorrelations=profile?.report?.high_correlations||[];
+  const missingColumns=columns.filter((row)=>Number(row.missing_count)>0).sort((a,b)=>Number(b.missing_ratio)-Number(a.missing_ratio));
+  const outlierColumns=columns.filter((row)=>Number(row.outlier_count)>0).sort((a,b)=>Number(b.outlier_ratio)-Number(a.outlier_ratio));
+  const lowInfoColumns=columns.filter((row)=>Number(row.unique_count)<=1||Number(row.unique_ratio)<=0.01);
+  const semantic=version.semantic_diff;
+  const variantRecord=version.variant_record;
+  const findings=diagnosis?.findings||[];
+  const filteredFindings=riskFilter==="all"?findings:findings.filter((item)=>item.severity===riskFilter);
+  const interventions=contract?.intervention_options||[];
+  const selected=interventions.filter((item)=>selectedOptions.includes(item.id));
+  const selectedOps=selected.flatMap((item)=>item.operations||[]);
+  const scoreBreakdown=diagnosis?.score_breakdown||{};
+  const mlrsComponents=scoreBreakdown.mlrs_components||diagnosis?.mlrs_components||{};
+  const lrsComponents=scoreBreakdown.lrs_components||diagnosis?.lrs_components||{};
+  const statusLabel=selectorStatus||version.diagnosis_status||(diagnosis?"Diagnosed":"Not Diagnosed");
+  const versionKind=variantRecord?"Variant":version.parent_version_id?"Revision":"Baseline";
+  const exportReport=async()=>{
+    if(!diagnosis)return;
+    setStatus("Preparing diagnosis report...");
+    try{downloadBlob(await datasetApi.diagnosisReport(version.id),`fedrepro-diagnosis-v${version.version_number}-report.docx`);setStatus("Diagnosis report exported.");}
+    catch(err){setStatus(err.response?.data?.detail||"Could not export diagnosis report.");}
+  };
+  const exportContract=()=>contract&&downloadBlob(new Blob([JSON.stringify({...contract,selected_option_ids:selectedOptions},null,2)],{type:"application/json"}),`fedrepro-diagnosis-v${version.version_number}-contract.json`);
+  const toggleOption=(id)=>setSelectedOptions((items)=>items.includes(id)?items.filter((item)=>item!==id):[...items,id]);
+  const qualityTabs=<div className="diagnosis-detail-tabs">
+    <details open><summary>Overview</summary><MiniEvidenceList title="Profile overview" rows={[["Rows",summary.row_count??version.row_count],["Columns",summary.column_count??version.column_count],["Numeric features",summary.numeric_columns??"N/A"],["Categorical features",summary.categorical_columns??"N/A"],["Low-information features",lowInfoColumns.length]]} /></details>
+    <details open><summary>Missingness</summary>{missingColumns.length?missingColumns.slice(0,16).map((row)=><MiniBar key={row.name} label={row.name} value={Number(row.missing_ratio)*100} max={100} />):<Notice>No missing values detected.</Notice>}</details>
+    <details><summary>Duplicates</summary><MiniEvidenceList title="Duplicate evidence" rows={[["Rows",summary.duplicate_rows??"N/A"],["Ratio",compactPct(summary.duplicate_ratio)]]} /></details>
+    <details><summary>Outliers</summary>{outlierColumns.length?outlierColumns.slice(0,16).map((row)=><MiniBar key={row.name} label={row.name} value={Number(row.outlier_ratio)*100} max={100} />):<Notice>No outlier evidence detected.</Notice>}</details>
+    <details><summary>Correlation</summary>{highCorrelations.length?highCorrelations.slice(0,16).map((row)=><MiniBar key={`${row.left}-${row.right}`} label={`${row.left} / ${row.right}`} value={Math.abs(Number(row.correlation))*100} max={100} />):<Notice>No strong correlation pairs crossed the reporting threshold.</Notice>}</details>
+    <details><summary>Distribution</summary><ClassDistributionBars distribution={task.class_distribution} /></details>
+    <details><summary>Target</summary><MiniEvidenceList title="Target" rows={[["Column",task.target_column||version.configuration?.target_column||"N/A"],["Minority class",task.minority_class||"N/A"],["Imbalance ratio",task.imbalance_ratio?metricValue(task.imbalance_ratio):"N/A"]]} /></details>
+  </div>;
+  const relatedForFinding=(finding)=>interventions.find((item)=>item.source_findings?.includes(finding.code)||item.triggered_by?.includes(finding.code));
+  const evidenceRows=(finding)=>Object.entries(finding?.evidence||{}).map(([key,value])=>[key.replaceAll("_"," "), typeof value==="object"?JSON.stringify(value).slice(0,160):String(value)]);
+  const openDetail=(type, payload={})=>{
+    const detailBody=(rows, extra=null)=><div className="stack"><MiniEvidenceList title="Evidence" rows={rows} />{extra}</div>;
+    if(type==="quality"){
+      const key=payload.key;
+      const bodies={
+        rows:detailBody([["Rows",summary.row_count??version.row_count],["Profile report",profile?.id||"N/A"],["Version",`V${version.version_number}`],["Immutable version id",version.id]]),
+        columns:detailBody([["Columns",summary.column_count??version.column_count],["Numeric features",summary.numeric_columns??"N/A"],["Categorical features",summary.categorical_columns??"N/A"],["Configured target",version.configuration?.target_column||"N/A"]]),
+        missing:detailBody([["Missing cells",summary.missing_cells??0],["Missing ratio",compactPct(summary.missing_ratio)],["Affected columns",missingColumns.length]],<div className="stack">{missingColumns.length?missingColumns.slice(0,16).map((row)=><MiniBar key={row.name} label={row.name} value={Number(row.missing_ratio)*100} max={100} tone="medium" />):<Notice>No missing-value columns in persisted profile evidence.</Notice>}</div>),
+        missingRatio:detailBody([["Missing ratio",compactPct(summary.missing_ratio)],["Missing cells",summary.missing_cells??0],["Profiler",profile?.profiler_version||"N/A"]],<MiniBar label="missing ratio" value={Number(summary.missing_ratio||0)*100} max={100} tone={summary.missing_ratio>.05?"medium":"low"} />),
+        duplicates:detailBody([["Duplicate rows",summary.duplicate_rows??0],["Duplicate ratio",compactPct(summary.duplicate_ratio)],["Rows",summary.row_count??version.row_count]],<MiniBar label="duplicate ratio" value={Number(summary.duplicate_ratio||0)*100} max={100} tone={summary.duplicate_ratio>.01?"medium":"low"} />),
+        numeric:detailBody([["Numeric features",summary.numeric_columns??"N/A"],["Total columns",summary.column_count??version.column_count],["Outlier columns",outlierColumns.length]]),
+        categorical:detailBody([["Categorical features",summary.categorical_columns??"N/A"],["Total columns",summary.column_count??version.column_count],["Target",task.target_column||version.configuration?.target_column||"N/A"]]),
+        outliers:detailBody([["Affected columns",outlierColumns.length],["Top column",outlierColumns[0]?.name||"N/A"]],<div className="stack">{outlierColumns.length?outlierColumns.slice(0,16).map((row)=><MiniBar key={row.name} label={row.name} value={Number(row.outlier_ratio)*100} max={100} tone="medium" />):<Notice>No outlier evidence detected by the persisted profile.</Notice>}</div>),
+        correlation:detailBody([["High-correlation pairs",highCorrelations.length],["Top pair",highCorrelations[0]?`${highCorrelations[0].left} / ${highCorrelations[0].right}`:"N/A"]],<div className="stack">{highCorrelations.length?highCorrelations.slice(0,16).map((row)=><MiniBar key={`${row.left}-${row.right}`} label={`${row.left} / ${row.right}`} value={Math.abs(Number(row.correlation))*100} max={100} tone="medium" />):<Notice>No strong correlation evidence crossed the reporting threshold.</Notice>}</div>),
+        lowInfo:detailBody([["Low-information features",lowInfoColumns.length],["Examples",lowInfoColumns.slice(0,5).map((row)=>row.name).join(", ")||"N/A"]],<MiniEvidenceList title="Features" rows={lowInfoColumns.length?lowInfoColumns.map((row)=>[row.name, `${row.unique_count} unique, ${compactPct(row.unique_ratio)}`]):[["Status","No constant or low-information feature evidence available"]]} />),
+        target:detailBody([["Target",task.target_column||version.configuration?.target_column||"N/A"],["Minority class",task.minority_class||"N/A"],["Imbalance ratio",task.imbalance_ratio?metricValue(task.imbalance_ratio):"N/A"]],<ClassDistributionBars distribution={task.class_distribution} />),
+        all:qualityTabs
+      };
+      setDetail({eyebrow:"Dataset Quality",title:payload.title||"Quality evidence",subtitle:"Persisted profile evidence for this immutable version.",body:bodies[key]||qualityTabs,raw:profile?.report});
+      return;
+    }
+    if(type==="metric"){
+      const metric=payload.metric;
+      const definitions={
+        MLRS:["Machine learning readiness risk score","Lower is better",displayMetric(diagnosis?.mlrs_score,"N/A"),mlrsComponents,scoreBreakdown],
+        LRS:["Leakage risk score","Lower is better",displayMetric(diagnosis?.lrs_score,"N/A"),lrsComponents,scoreBreakdown?.leakage_evidence||lrsComponents],
+        SCM:["Semantic comparability metric","Higher means larger semantic change",semantic?displayMetric(semantic.scm_score):"N/A",{},semantic],
+        DSI:["Dataset shift indicator","Higher means greater distribution shift",semantic?displayMetric(semantic.dsi_score):"N/A",{},semantic],
+        VRS:["Variant readiness score","Higher is better",variantRecord?.vrs_score!=null?displayMetric(variantRecord.vrs_score):"N/A",{},variantRecord]
+      };
+      const [definition,direction,value,components,raw]=definitions[metric]||[];
+      const componentEntries=Object.entries(components||{});
+      setDetail({eyebrow:"Diagnosis Metrics",title:metric,subtitle:definition,body:<div className="stack"><MiniEvidenceList title="Metric interpretation" rows={[["Current value",value],["Direction",direction],["Status",payload.state||"Available"],["Ruleset",diagnosis?.ruleset_version||semantic?.ruleset_version||"N/A"],["Version",`V${version.version_number}`],["Parent",version.parent_version_id?`V${version.parent_version_id}`:"Baseline / not applicable"]]} />{componentEntries.length?<div className="stack">{componentEntries.map(([key,value])=><MiniBar key={key} label={key.replaceAll("_"," ")} value={value} max={metric==="LRS"?35:25} tone={riskTone(value)} />)}</div>:<Notice>No component breakdown is stored for this metric.</Notice>}<MiniEvidenceList title="Related findings" rows={findings.filter((finding)=>metric==="LRS"?String(finding.code).includes("LEAK"):true).slice(0,6).map((finding)=>[finding.code,finding.issue])} /></div>,raw});
+      return;
+    }
+    if(type==="risk"||type==="derivation"){
+      const finding=payload.finding;
+      const related=payload.related||relatedForFinding(finding);
+      const cols=DiagnosisFindingColumns(finding);
+      setDetail({eyebrow:type==="derivation"?"Evidence -> Risk -> Action":finding.code,title:finding.issue,subtitle:finding.risk,body:<div className="stack"><MiniEvidenceList title="Finding" rows={[["Severity",finding.severity],["Affected columns",cols.join(", ")||"Dataset-level"],["Recommendation",finding.recommendation],["Related metric",String(finding.code).includes("LEAK")?"LRS":"MLRS"],["Related intervention",related?.title||"N/A"]]} />{!!evidenceRows(finding).length&&<MiniEvidenceList title="Threshold evidence" rows={evidenceRows(finding)} />}</div>,raw:{finding,related}});
+      return;
+    }
+    if(type==="risk-map"){
+      const row=payload.row;
+      setDetail({eyebrow:"Feature x Risk Map",title:row.column,subtitle:"Feature-level risk family evidence.",body:detailBody([["Role",row.role],["Risks",row.risks?.join(", ")||"None"],["Generation",methodLabel(version)]],<MiniEvidenceList title="Related findings" rows={findings.filter((finding)=>DiagnosisFindingColumns(finding).includes(row.column)).map((finding)=>[finding.code,finding.issue])} />),raw:row.raw||row});
+      return;
+    }
+    if(type==="intervention"){
+      const option=payload.option;
+      setDetail({eyebrow:"Intervention Planner",title:option.title,subtitle:option.objective,body:<div className="stack"><MiniEvidenceList title="Intervention" rows={[["Status",option.status],["Severity",option.severity],["Triggered by",option.triggered_by?.join(", ")||option.source_findings?.join(", ")||"N/A"],["Affected columns",option.affected_columns?.join(", ")||"Dataset-level"],["Expected changes",option.expected_changes?.join("; ")||"N/A"],["Risks introduced",option.risks_introduced?.join("; ")||"N/A"]]} /><MiniEvidenceList title="Ordered operations" rows={(option.operations||[]).map((op,index)=>[`${index+1}. ${op.operation?.replaceAll("_"," ")}`,op.purpose||op.columns?.join(", ")||"Operation"])} /><MetricImpactPreview impact={option.metric_impact} /></div>,raw:option});
+      return;
+    }
+    if(type==="operation"){
+      const {option,op,index}=payload;
+      setDetail({eyebrow:"Intervention Operation",title:op.operation?.replaceAll("_"," ")||`Operation ${index+1}`,subtitle:option.title,body:detailBody([["Step",index+1],["Purpose",op.purpose||"N/A"],["Columns",op.columns?.join(", ")||option.affected_columns?.join(", ")||"Dataset-level"],["Intervention",option.title],["Triggered by",option.triggered_by?.join(", ")||option.source_findings?.join(", ")||"N/A"]]),raw:{option,operation:op}});
+      return;
+    }
+    if(type==="decision"){
+      const decision=payload.decision;
+      setDetail({eyebrow:"Human Decision",title:decision.question,subtitle:decision.recommended_default,body:<div className="stack"><MiniEvidenceList title="Decision evidence" rows={[["Finding",decision.finding_code],["Scope",decision.affected_columns?.join(", ")||"Dataset-level"],["Accepting",decision.consequence_accept],["Rejecting",decision.consequence_reject]]} /><div className="row"><Button variant="secondary compact">Accept</Button><Button variant="ghost compact">Reject</Button></div></div>,raw:decision});
+      return;
+    }
+    if(type==="decisions"){
+      const decisions=contract?.human_decisions||[];
+      setDetail({eyebrow:"Human Decisions",title:`Human decisions required: ${decisions.length}`,subtitle:"Review choices before generating variants.",body:decisions.length?<div className="decision-drawer-list">{decisions.map((decision,index)=><button type="button" key={`${decision.finding_code}-${index}`} onClick={()=>openDetail("decision",{decision})}><strong>{decision.question}</strong><span>{decision.recommended_default}</span><small>{decision.affected_columns?.join(", ")||"Dataset-level"}</small></button>)}</div>:<Notice>No human approvals are required by the current plan.</Notice>,raw:decisions});
+      return;
+    }
+    if(type==="plan"){
+      const rows={
+        selected:[["Selected options",selected.length],["Options",selected.map((item)=>item.title).join(", ")||"None"]],
+        operations:[["Total operations",selectedOps.length],["Operations",selectedOps.map((op)=>op.operation?.replaceAll("_"," ")).join(", ")||"None"]],
+        columns:[["Affected columns",[...new Set(selectedOps.flatMap((item)=>item.columns||[]))].join(", ")||"Dataset-level"],["Selected interventions",selected.length]],
+        baseline:[["Baseline version",`V${version.version_number}`],["Generation method",methodLabel(version)],["Parent",version.parent_version_id?`V${version.parent_version_id}`:"Baseline"]],
+        metrics:[["Recommended metrics",contract?.experiment_handoff?.recommended_metrics?.join(", ")||"Primary metric"],["Primary metric",version.configuration?.primary_metric||"N/A"]],
+        constraints:[["Human decisions remaining",contract?.human_decisions?.length||0],["Required baseline",contract?.experiment_handoff?.required_baseline||`V${version.version_number}`]]
+      };
+      setDetail({eyebrow:"Variant Plan",title:payload.title||"Plan detail",subtitle:"Generator-ready selections derived from persisted intervention evidence.",body:detailBody(rows[payload.key]||rows.selected),raw:{contract,selectedOptions,selected}});
+      return;
+    }
+    if(type==="evidence"){
+      const bodies={
+        inspector:<EvidenceInspector version={version} profile={profile} diagnosis={diagnosis} semantic={semantic} variantRecord={variantRecord} contract={contract} />,
+        fingerprint:detailBody([["File hash",shortHash(version.fingerprint?.file_hash)||"N/A"],["Schema hash",shortHash(version.fingerprint?.schema_hash)||"N/A"],["Metadata hash",shortHash(version.fingerprint?.metadata_hash)||"N/A"],["Combined",shortHash(version.fingerprint?.combined_fingerprint)||"N/A"],["Algorithm",version.fingerprint?.algorithm_version||"N/A"]]),
+        lineage:detailBody([["Parent",version.parent_version_id?`V${version.parent_version_id}`:"Baseline"],["Current",`V${version.version_number}`],["Generation method",methodLabel(version)],["Notes",version.version_notes||"N/A"]]),
+        stability:detailBody([["SCM",semantic?displayMetric(semantic.scm_score):"N/A"],["DSI",semantic?displayMetric(semantic.dsi_score):"N/A"],["Schema added",semantic?.report?.columns_added?.join(", ")||"N/A"],["Schema removed",semantic?.report?.columns_removed?.join(", ")||"N/A"],["Missingness delta",semantic?.report?.missing_ratio_change!=null?signedPct(semantic.report.missing_ratio_change):"N/A"],["Duplicate delta",semantic?.report?.duplicate_rows?.delta??"N/A"]]),
+        reproducibility:detailBody([["Fingerprint",shortHash(version.fingerprint?.combined_fingerprint)||"N/A"],["Configuration hash",shortHash(version.configuration?.configuration_hash)||"N/A"],["Profile report",profile?.id||version.profile_report_id||"N/A"],["Diagnosis report",diagnosis?.id||"N/A"],["Ruleset",diagnosis?.ruleset_version||"N/A"],["Profiler",profile?.profiler_version||"N/A"],["Generation method",methodLabel(version)]]),
+        contract:<DiagnosisEvidenceSummary version={version} profile={profile} diagnosis={diagnosis} contract={contract} />
+      };
+      setDetail({eyebrow:"Evidence Inspector",title:payload.title||"Reproducible evidence",subtitle:"Stored deterministic evidence for audit and replay.",body:bodies[payload.key]||bodies.inspector,raw:{version,profile,diagnosis,semantic,variantRecord,contract}});
+      return;
+    }
+    if(type==="ai"){
+      setDetail({eyebrow:"AI Explanation",title:"Persisted evidence explanation",subtitle:diagnosisReportStatus||(!diagnosis?"Run diagnosis before AI explanation.":!diagnosisReport?"No stored AI interpretation exists for this version.":"Generated from stored deterministic evidence."),body:<DiagnosisLLMReport report={diagnosisReport} status={diagnosisReportStatus||(!diagnosis?"Run diagnosis first before an evidence explanation can be generated.":!diagnosisReport?"No stored AI interpretation exists for this version.":"")} />,raw:diagnosisReport});
+    }
+  };
+  const riskFamilies=["missing","leakage","corr","outlier","scaling","imbalance"];
+  const heatRows=(contract?.column_impact||[]).map((row)=>({column:row.column, role:row.role, risks:row.risk_families||[], raw:row}));
+  const fallbackHeatRows=[...new Set(findings.flatMap((finding)=>DiagnosisFindingColumns(finding)))].map((column)=>({column, role:"feature", risks:findings.filter((finding)=>DiagnosisFindingColumns(finding).includes(column)).map((finding)=>finding.code), raw:null}));
+
+  return <div className="diagnosis-console">
+    <div className="diagnosis-context-bar">
+      <Field label="Dataset"><select value={activeDataset?.id||""} onChange={chooseDataset}>{datasetsWithVersions.map((dataset)=><option key={dataset.id} value={dataset.id}>{dataset.name}</option>)}</select></Field>
+      <Field label="Version"><select value={selectedVersionId} onChange={chooseVersion}><option value="">Select version</option>{versionOptions.map((item)=><option key={item.id} value={item.id}>{diagnosisVersionInfo(item, version.id, selectorStatus).label}</option>)}</select></Field>
+      <span className="context-kind">{versionKind}</span>
+      <span className="context-kind">{version.configuration?.target_column||"No target"}</span>
+      <Badge tone={statusLabel==="Diagnosed"?"success":statusLabel==="Recompute Available"||statusLabel==="Running"?"warning":statusLabel==="Failed"?"critical":"neutral"}>{statusLabel}</Badge>
+      <span className="context-kind">{diagnosis?.ruleset_version||"No ruleset"}</span>
+      <span className="context-kind">{methodLabel(version)}</span>
+      {!diagnosis?<Button loading={running} onClick={()=>runDiagnosis(false)}><ShieldCheck size={14}/>Run Diagnosis</Button>:<Button variant="secondary" loading={running} onClick={()=>runDiagnosis(true)}><ShieldCheck size={14}/>Recompute</Button>}
+      <Button variant="secondary" disabled={!diagnosis} onClick={exportReport}><FileCheck2 size={14}/>Export</Button>
+      <Button variant="secondary" onClick={()=>openDetail("evidence",{key:"inspector",title:"Evidence Inspector"})}><Eye size={14}/>Evidence Details</Button>
+    </div>
+    {versionStatusList}
+    {(status||versionStatus)&&<Notice error={(status||versionStatus).includes("Could not")||(status||versionStatus).includes("failed")}>{status||versionStatus}</Notice>}
+
+    {!diagnosis?<Card className="diagnosis-empty-run"><div><p className="eyebrow">Not Diagnosed</p><h2>Persisted diagnosis evidence is missing for V{version.version_number}</h2><p className="muted">Run diagnosis to persist profile, diagnosis, score-breakdown, and non-baseline semantic evidence for this immutable version.</p></div></Card>:<>
+      <section className="console-section quality-console">
+        <div className="console-section-head"><div><p className="eyebrow">Data Quality Overview</p><h2>Compact profiling evidence</h2></div><Button variant="secondary compact" onClick={()=>openDetail("quality",{key:"all",title:"Quality Details"})}>View Quality Details</Button></div>
+        <div className="quality-figure-grid">
+          <SmartCard icon={TableProperties} label="Rows" value={summary.row_count??version.row_count} note="immutable version" onClick={()=>openDetail("quality",{key:"rows",title:"Row profile"})} />
+          <SmartCard icon={TableProperties} label="Columns" value={summary.column_count??version.column_count} note={`${summary.numeric_columns??"N/A"} num / ${summary.categorical_columns??"N/A"} cat`} onClick={()=>openDetail("quality",{key:"columns",title:"Column profile"})} />
+          <SmartCard icon={AlertTriangle} label="Missing Cells" value={summary.missing_cells??0} note={compactPct(summary.missing_ratio)} tone={summary.missing_ratio>.05?"medium":"low"} onClick={()=>openDetail("quality",{key:"missing",title:"Missingness evidence"})}><MiniBar label="cells" value={Number(summary.missing_ratio||0)*100} max={100} /></SmartCard>
+          <SmartCard icon={AlertTriangle} label="Missing Ratio" value={compactPct(summary.missing_ratio)} note={`${missingColumns.length} columns affected`} tone={summary.missing_ratio>.05?"medium":"low"} onClick={()=>openDetail("quality",{key:"missingRatio",title:"Missing ratio"})}><MiniBar label="ratio" value={Number(summary.missing_ratio||0)*100} max={100} /></SmartCard>
+          <SmartCard icon={Copy} label="Duplicates" value={summary.duplicate_rows??0} note={compactPct(summary.duplicate_ratio)} tone={summary.duplicate_ratio>.01?"medium":"low"} onClick={()=>openDetail("quality",{key:"duplicates",title:"Duplicate evidence"})}><MiniBar label="ratio" value={Number(summary.duplicate_ratio||0)*100} max={100} /></SmartCard>
+          <SmartCard icon={Gauge} label="Numeric" value={summary.numeric_columns??"N/A"} note="numeric features" onClick={()=>openDetail("quality",{key:"numeric",title:"Numeric feature evidence"})} />
+          <SmartCard icon={Database} label="Categorical" value={summary.categorical_columns??"N/A"} note="categorical features" onClick={()=>openDetail("quality",{key:"categorical",title:"Categorical feature evidence"})} />
+          <SmartCard icon={Gauge} label="Outliers" value={outlierColumns.length} note={outlierColumns.length?"columns affected":"clear"} tone={outlierColumns.length?"medium":"low"} onClick={()=>openDetail("quality",{key:"outliers",title:"Outlier evidence"})} />
+          <SmartCard icon={GitCompare} label="Correlation" value={highCorrelations.length} note={highCorrelations.length?"high pairs":"clear"} tone={highCorrelations.length?"medium":"low"} onClick={()=>openDetail("quality",{key:"correlation",title:"Correlation evidence"})} />
+          <SmartCard icon={ScanSearch} label="Low Info" value={lowInfoColumns.length} note="constant or near-unique" tone={lowInfoColumns.length?"medium":"low"} onClick={()=>openDetail("quality",{key:"lowInfo",title:"Low-information features"})} />
+          <SmartCard icon={Target} label="Target" value={task.imbalance_ratio?`${metricValue(task.imbalance_ratio)}x`:"N/A"} note={task.minority_class?`minority ${task.minority_class}`:"not computed"} onClick={()=>openDetail("quality",{key:"target",title:"Target distribution"})}><ClassDistributionBars distribution={task.class_distribution} /></SmartCard>
+        </div>
+      </section>
+
+      <section className="metric-strip">
+        {[
+          ["MLRS",diagnosis.mlrs_score,"Lower is better","readiness risk",riskTone(diagnosis.mlrs_score)],
+          ["LRS",diagnosis.lrs_score,"Lower is better","leakage risk",riskTone(diagnosis.lrs_score)],
+          ["SCM",semantic?.scm_score,"Higher means larger change",semantic?"computed":"not applicable","neutral"],
+          ["DSI",semantic?.dsi_score,"Higher means greater shift",semantic?"computed":"not applicable","neutral"],
+          ["VRS",variantRecord?.vrs_score,"Higher is better",variantRecord?"variant readiness":"not applicable",variantRecord?.vrs_score>=80?"low":"neutral"]
+        ].map(([label,value,meaning,state,tone])=><button type="button" key={label} className={`metric-strip-card ${tone}`} onClick={()=>openDetail("metric",{metric:label,state})}><span>{label}</span><strong>{value==null?"N/A":metricValue(value)}</strong><em>{meaning}</em><small>{state}</small></button>)}
+      </section>
+
+      <section className="console-section diagnosis-derivation">
+        <div className="console-section-head"><div><p className="eyebrow">Diagnosis Visual Summary</p><h2>Quality Evidence -> Risks -> Interventions</h2></div></div>
+        <div className="derivation-list">
+          {findings.slice(0,5).map((finding)=>{
+            const option=relatedForFinding(finding);
+            const evidence=Object.entries(finding.evidence||{})[0];
+            return <button type="button" key={finding.code} onClick={()=>openDetail("derivation",{finding,related:option})}><span>{evidence?evidence[0].replaceAll("_"," "):"Evidence"}</span><i /> <strong>{finding.issue}</strong><i /> <em>{option?.title||"Review"}</em></button>;
+          })}
+        </div>
+      </section>
+
+      <main className="diagnosis-main-grid">
+        <div className="diagnosis-primary-stack">
+          <section className="console-section">
+            <div className="console-section-head"><div><p className="eyebrow">Risk Explorer</p><h2>Findings</h2></div><div className="segmented-filter">{["all","critical","high","medium","low"].map((item)=><button type="button" key={item} className={riskFilter===item?"active":""} onClick={()=>setRiskFilter(item)}>{item}</button>)}</div></div>
+            {!filteredFindings.length?<Notice>No findings for this filter.</Notice>:<div className="risk-console-list">{filteredFindings.map((item)=>{
+              const cols=DiagnosisFindingColumns(item);
+              const related=relatedForFinding(item);
+              return <article key={item.code} role="button" tabIndex={0} className={`risk-console-card ${item.severity} interactive`} onClick={()=>openDetail("risk",{finding:item,related})} onKeyDown={(event)=>event.key==="Enter"&&openDetail("risk",{finding:item,related})}><div><Badge tone={item.severity}>{item.severity}</Badge><strong>{item.issue}</strong></div><p>{cols.length?`${cols.length} affected feature${cols.length===1?"":"s"}`:"Dataset-level evidence"}</p><span>{cols.slice(0,3).join(", ")||item.code}</span><footer><Button variant="secondary compact" onClick={(event)=>{event.stopPropagation();openDetail("risk",{finding:item,related});}}>Inspect</Button><Button variant="ghost compact" disabled={!related} onClick={(event)=>{event.stopPropagation();related&&setSelectedOptions((ids)=>ids.includes(related.id)?ids:[...ids,related.id]);}}>Plan Intervention</Button></footer></article>;
+            })}</div>}
+          </section>
+
+          <section className="console-section">
+            <div className="console-section-head"><div><p className="eyebrow">Feature x Risk Map</p><h2>Risk matrix</h2></div><div className="segmented-filter"><button type="button" className={mapMode==="visual"?"active":""} onClick={()=>setMapMode("visual")}>Visual Map</button><button type="button" className={mapMode==="table"?"active":""} onClick={()=>setMapMode("table")}>Table View</button></div></div>
+            {mapMode==="visual"?<div className="feature-risk-map">{(heatRows.length?heatRows:fallbackHeatRows).map((row)=><div role="button" tabIndex={0} className="risk-map-row" key={row.column} onClick={()=>openDetail("risk-map",{row})} onKeyDown={(event)=>event.key==="Enter"&&openDetail("risk-map",{row})}><strong>{row.column}</strong>{riskFamilies.map((risk)=>{
+              const matched=row.risks.filter((item)=>String(item).toLowerCase().includes(risk));
+              return <button type="button" key={risk} className={`risk-map-cell ${matched.length?"active":""}`} aria-label={`${row.column} ${risk} evidence`} title={risk} onClick={(event)=>{event.stopPropagation();openDetail("risk-map",{row:{...row,risks:matched.length?matched:[risk]}});}} />;
+            })}</div>)}</div>:<RiskMapTable rows={(heatRows.length?heatRows:fallbackHeatRows)} onOpen={(row)=>openDetail("risk-map",{row})} />}
+          </section>
+
+          <section className="console-section">
+            <div className="console-section-head"><div><p className="eyebrow">Evidence</p><h2>Reproducibility and audit trail</h2></div><Button variant="secondary compact" onClick={()=>openDetail("evidence",{key:"inspector",title:"Evidence Inspector"})}>Open Inspector</Button></div>
+            <div className="smart-grid evidence-grid">
+              <SmartCard icon={FileStack} label="Fingerprint" value={shortHash(version.fingerprint?.combined_fingerprint)||"N/A"} note={version.fingerprint?.algorithm_version||"algorithm N/A"} onClick={()=>openDetail("evidence",{key:"fingerprint",title:"Fingerprint"})} />
+              <SmartCard icon={Network} label="Lineage" value={version.parent_version_id?`V${version.parent_version_id} -> V${version.version_number}`:"Baseline"} note={methodLabel(version)} onClick={()=>openDetail("evidence",{key:"lineage",title:"Lineage"})} />
+              <SmartCard icon={ClipboardCheck} label="Contract" value={contract?.readiness?.intervention_count??0} note={`${contract?.readiness?.required_decision_count??0} decisions`} onClick={()=>openDetail("evidence",{key:"contract",title:"Diagnosis contract"})} />
+              <SmartCard icon={GitBranch} label="Stability" value={semantic?`SCM ${displayMetric(semantic.scm_score)}`:"N/A"} note={semantic?`DSI ${displayMetric(semantic.dsi_score)}`:"baseline or unavailable"} onClick={()=>openDetail("evidence",{key:"stability",title:"Stability evidence"})} />
+              <SmartCard icon={ShieldCheck} label="Reproducibility" value={diagnosis?.ruleset_version||"N/A"} note={profile?.profiler_version||"profile N/A"} onClick={()=>openDetail("evidence",{key:"reproducibility",title:"Reproducibility evidence"})} />
+            </div>
+          </section>
+
+          <section className="console-section">
+            <div className="console-section-head"><div><p className="eyebrow">Intervention Planner</p><h2>Collapsed actions</h2></div><button type="button" className="decision-pill" onClick={()=>openDetail("decisions")}>Human decisions required: {contract?.human_decisions?.length||0}</button></div>
+            {!interventions.length?<Empty>No intervention options were generated from current findings.</Empty>:<div className="planner-list">{interventions.map((option)=><article key={option.id} role="button" tabIndex={0} className={`planner-item ${selectedOptions.includes(option.id)?"selected":""}`} onClick={()=>openDetail("intervention",{option})} onKeyDown={(event)=>event.key==="Enter"&&openDetail("intervention",{option})}><div className="planner-item-row"><span><input type="checkbox" checked={selectedOptions.includes(option.id)} onClick={(event)=>event.stopPropagation()} onChange={()=>toggleOption(option.id)} /><strong>{option.title}</strong></span><Badge tone={option.severity}>{option.status}</Badge></div><p>{option.triggered_by?.join(", ")||option.source_findings?.join(", ")||"Finding"} - {option.affected_columns?.length||0} columns - {option.metric_impact?.reliability_effect||"direction documented"}</p><div className="planner-operation-row">{(option.operations||[]).slice(0,3).map((op,index)=><button type="button" key={`${option.id}-${index}`} onClick={(event)=>{event.stopPropagation();openDetail("operation",{option,op,index});}}>{op.operation?.replaceAll("_"," ")}</button>)}</div></article>)}</div>}
+          </section>
+
+          <section className="ai-compact-row"><span>AI Evidence Explanation</span><Button variant="secondary compact" onClick={()=>openDetail("ai")}>View</Button></section>
+        </div>
+
+        <aside className="variant-plan-console">
+          <p className="eyebrow">Variant Plan</p><h2>Selected interventions</h2>
+          <div className="context-list compact">
+            <button type="button" className="context-row clickable" onClick={()=>openDetail("plan",{key:"selected",title:"Selected interventions"})}><strong>Selected</strong><span>{selected.length}</span></button>
+            <button type="button" className="context-row clickable" onClick={()=>openDetail("plan",{key:"operations",title:"Selected operations"})}><strong>Operations</strong><span>{selectedOps.length}</span></button>
+            <button type="button" className="context-row clickable" onClick={()=>openDetail("plan",{key:"columns",title:"Affected columns"})}><strong>Columns</strong><span>{[...new Set(selectedOps.flatMap((item)=>item.columns||[]))].join(", ")||"Dataset-level"}</span></button>
+            <button type="button" className="context-row clickable" onClick={()=>openDetail("decisions")}><strong>Human decisions</strong><span>{contract?.human_decisions?.length||0}</span></button>
+            <button type="button" className="context-row clickable" onClick={()=>openDetail("plan",{key:"baseline",title:"Baseline version"})}><strong>Baseline</strong><span>V{version.version_number}</span></button>
+            <button type="button" className="context-row clickable" onClick={()=>openDetail("plan",{key:"metrics",title:"Recommended metrics"})}><strong>Metrics</strong><span>{contract?.experiment_handoff?.recommended_metrics?.join(", ")||"Primary metric"}</span></button>
+            <button type="button" className="context-row clickable" onClick={()=>openDetail("plan",{key:"constraints",title:"Plan constraints"})}><strong>Constraints</strong><span>{selected.map((item)=>item.metric_impact?.reliability_effect).filter(Boolean).length?"Review required":"None selected"}</span></button>
+          </div>
+          <Button variant="secondary" onClick={()=>openDetail("plan",{key:"selected",title:"Review Variant Plan"})}>Review Plan</Button>
+          <Button id="open-variant-generator-btn" onClick={onOpenVariants} disabled={!onOpenVariants}><Zap size={14}/>Generate Variants</Button>
+          <details className="debug-disclosure"><summary>Advanced contract JSON</summary><pre className="pre">{JSON.stringify(contract||{},null,2)}</pre></details>
+        </aside>
+      </main>
+    </>}
+    <DetailDrawer detail={detail} onClose={()=>setDetail(null)} />
+  </div>;
+}
+
+function EvidenceInspector({ version, profile, diagnosis, semantic, variantRecord, contract }) {
+  return <div className="diagnosis-detail-tabs">
+    <details open><summary>Quality</summary><DiagnosisEvidenceSummary version={version} profile={profile} diagnosis={diagnosis} contract={contract} /></details>
+    <details><summary>Leakage</summary><pre className="pre">{JSON.stringify(diagnosis?.score_breakdown?.leakage_evidence||{},null,2)}</pre></details>
+    <details><summary>Stability</summary><MiniEvidenceList title="SCM / DSI" rows={[["SCM",semantic?displayMetric(semantic.scm_score):"Not computed"],["DSI",semantic?displayMetric(semantic.dsi_score):"Not computed"],["Schema added",semantic?.report?.columns_added?.join(", ")||"N/A"],["Schema removed",semantic?.report?.columns_removed?.join(", ")||"N/A"]]} /></details>
+    <details><summary>Reproducibility</summary><MiniEvidenceList title="Hashes" rows={[["Fingerprint",shortHash(version.fingerprint?.combined_fingerprint)||"N/A"],["Configuration",shortHash(version.configuration?.configuration_hash)||"N/A"],["Ruleset",diagnosis?.ruleset_version||"N/A"],["Method",methodLabel(version)]]} /></details>
+    <details><summary>Variant</summary><MiniEvidenceList title="Variant evidence" rows={[["VRS",variantRecord?.vrs_score!=null?displayMetric(variantRecord.vrs_score):"N/A"],["Pipeline",variantRecord?.pipeline_id||"N/A"],["Rank",variantRecord?.vrs_rank||"N/A"]]} /></details>
+  </div>;
+}
+
+function DecisionPanel({ decisions = [] }) {
+  if(!decisions.length)return <Notice>No human approvals are required by the current plan.</Notice>;
+  return <div className="decision-drawer-list">{decisions.map((item,index)=><article key={`${item.finding_code}-${index}`}><h3>{item.question}</h3><p>{item.recommended_default}</p><MiniEvidenceList title="Impact" rows={[["Accept",item.consequence_accept],["Reject",item.consequence_reject],["Scope",item.affected_columns?.join(", ")||"Dataset-level"]]} /><div className="row"><Button variant="secondary compact">Accept</Button><Button variant="ghost compact">Reject</Button></div></article>)}</div>;
+}
+
+// Deprecated quarantine: the exported DiagnosisPanel above is the only active Diagnosis workspace.
+// These retained legacy panels are not exported or called and should not receive new behavior.
+function DashboardDiagnosisPanelLegacy({ study, datasets = [], version, profile, diagnosis, initialContract = null, onVersion, onOpenVariants }) {
+  const [contract,setContract]=useState(initialContract);
+  const [status,setStatus]=useState("");
+  const [diagnosisReport,setDiagnosisReport]=useState(null);
+  const [diagnosisReportStatus,setDiagnosisReportStatus]=useState("");
+  const [selectedOptions,setSelectedOptions]=useState([]);
+  const [detail,setDetail]=useState(null);
+  const [running,setRunning]=useState(false);
+  useEffect(()=>{
+    let active=true;
+    const load=async()=>{
+      if(!version?.id||!diagnosis){setContract(null);return;}
+      if(initialContract?.header?.version_id===version.id){setContract(initialContract);setSelectedOptions(initialContract.intervention_options.map((item)=>item.id));setStatus("");return;}
+      setStatus("Loading diagnosis contract...");
+      try{
+        const result=await datasetApi.diagnosisContract(version.id);
+        if(active){setContract(result);setSelectedOptions(result.intervention_options.map((item)=>item.id));setStatus("");}
+      }catch(err){
+        if(active){setContract(null);setStatus(err.response?.data?.detail||"Could not load diagnosis contract.");}
+      }
+    };
+    load();
+    return()=>{active=false;};
+  },[version?.id,diagnosis?.id,initialContract?.header?.version_id]);
+  useEffect(()=>{
+    let active=true;
+    const load=async()=>{
+      if(!version?.id||!diagnosis?.id){setDiagnosisReport(null);setDiagnosisReportStatus("");return;}
+      setDiagnosisReportStatus("Preparing stored diagnosis interpretation...");
+      try{
+        const result=await aiApi.diagnosisInterpretation(study.id,version.id);
+        if(active){setDiagnosisReport(result);setDiagnosisReportStatus("");}
+      }catch(err){
+        if(active){setDiagnosisReport(null);setDiagnosisReportStatus(aiFallbackMessage());}
+      }
+    };
+    load();
+    return()=>{active=false;};
+  },[study.id,version?.id,diagnosis?.id]);
+  const selector=<DiagnosisVersionSelector datasets={datasets} version={version} onVersion={onVersion} status={status} setStatus={setStatus} transientStatus={running?"Running":status.includes("failed")?"Failed":null} />;
+  const runDiagnosis=async(recompute=false)=>{
+    if(!version?.id)return;
+    setRunning(true);
+    setStatus(recompute?"Recomputing diagnosis...":"Running diagnosis...");
+    try{
+      await datasetApi.runDiagnosis(version.id,recompute);
+      await onVersion(version.id);
+      setStatus(recompute?"Diagnosis recomputed.":"Diagnosis complete.");
+    }catch(err){
+      setStatus(err.response?.data?.detail||"Diagnosis run failed.");
+    }finally{
+      setRunning(false);
+    }
+  };
+  if(!version)return <div className="diagnosis-workspace stack">{selector}<Card><Empty>Select a dataset version to inspect its diagnosis.</Empty></Card></div>;
+  if(!diagnosis)return <div className="diagnosis-workspace stack">
+    {selector}
+    <Card className="diagnosis-empty-run">
+      <div>
+        <p className="eyebrow">Not diagnosed</p>
+        <h2>Persisted diagnosis evidence is missing for V{version.version_number}</h2>
+        <p className="muted">Run the deterministic ProfilingService to DiagnosisService workflow and store the result against this immutable dataset version.</p>
+      </div>
+      <Button loading={running} onClick={()=>runDiagnosis(false)}><ShieldCheck size={15}/>Run Diagnosis</Button>
+      {status&&<Notice error={status.includes("failed")||status.includes("Could not")}>{status}</Notice>}
+    </Card>
+  </div>;
+  const selected=(contract?.intervention_options||[]).filter((item)=>selectedOptions.includes(item.id));
+  const selectedOps=selected.flatMap((item)=>item.operations||[]);
+  const summary=profile?.report?.summary||{};
+  const columns=profile?.report?.columns||[];
+  const task=profile?.report?.task_profile||{};
+  const highCorrelations=profile?.report?.high_correlations||[];
+  const missingColumns=columns.filter((row)=>Number(row.missing_count)>0).sort((a,b)=>Number(b.missing_ratio)-Number(a.missing_ratio));
+  const outlierColumns=columns.filter((row)=>Number(row.outlier_count)>0).sort((a,b)=>Number(b.outlier_ratio)-Number(a.outlier_ratio));
+  const lowInfoColumns=columns.filter((row)=>Number(row.unique_count)<=1||Number(row.unique_ratio)<=0.01);
+  const scoreBreakdown=diagnosis.score_breakdown||{};
+  const mlrsComponents=scoreBreakdown.mlrs_components||diagnosis.mlrs_components||{};
+  const lrsComponents=scoreBreakdown.lrs_components||diagnosis.lrs_components||{};
+  const variantRecord=version.variant_record;
+  const semantic=version.semantic_diff;
+  const exportReport=async()=>{
+    setStatus("Preparing diagnosis report...");
+    try{
+      const blob=await datasetApi.diagnosisReport(version.id);
+      downloadBlob(blob,`fedrepro-diagnosis-v${version.version_number}-report.docx`);
+      setStatus("Diagnosis report exported.");
+    }catch(err){
+      setStatus(err.response?.data?.detail||"Could not export diagnosis report.");
+    }
+  };
+  const exportContract=()=>{
+    if(!contract)return;
+    downloadBlob(new Blob([JSON.stringify({...contract,selected_option_ids:selectedOptions},null,2)],{type:"application/json"}),`fedrepro-diagnosis-v${version.version_number}-contract.json`);
+  };
+  const toggleOption=(id)=>setSelectedOptions((items)=>items.includes(id)?items.filter((item)=>item!==id):[...items,id]);
+  const openRows=(title, rows, raw, eyebrow="Evidence")=>setDetail({title, eyebrow, raw, body:<MiniEvidenceList title={title} rows={rows} />});
+  return <div className="diagnosis-workspace stack">
+    {selector}
+    <Card className="diagnosis-dashboard-head">
+      <div className="version-page-head">
+        <div>
+          <p className="eyebrow">Diagnosis dashboard</p>
+          <h2>{study.name}</h2>
+          <p className="muted">V{version.version_number} - {methodLabel(version)} - {version.diagnosis_status||"Diagnosed"} - MLRS {displayMetric(diagnosis.mlrs_score)} - LRS {displayMetric(diagnosis.lrs_score)}</p>
+        </div>
+        <div className="summary-actions">
+          <Badge tone={version.diagnosis_status==="Recompute Available"?"warning":"success"}>{version.diagnosis_status||"Diagnosed"}</Badge>
+          <Button variant="secondary" loading={running} onClick={()=>runDiagnosis(true)}><ShieldCheck size={15}/>Recompute Diagnosis</Button>
+          <Button variant="secondary" onClick={exportContract} disabled={!contract}><Copy size={15}/>Export contract</Button>
+          <Button onClick={exportReport}><FileCheck2 size={15}/>Export report</Button>
+        </div>
+      </div>
+      {status&&<Notice error={status.includes("Could not")||status.includes("failed")}>{status}</Notice>}
+      <div className="diagnosis-status-strip">
+        <button type="button" onClick={()=>openRows("Dataset identity", [["Dataset", contract?.header?.dataset_name||"Dataset"],["Version", `V${version.version_number}`],["Method", methodLabel(version)],["Created", formatDate(diagnosis.created_at)]], version)}>
+          <Database size={14}/><span>{contract?.header?.dataset_name||"Dataset"}</span>
+        </button>
+        <button type="button" onClick={()=>openRows("Target and configuration", [["Target", version.configuration?.target_column||"N/A"],["Metric", version.configuration?.primary_metric||"N/A"],["Validation", version.configuration?.validation_strategy||"N/A"]], version.configuration)}>
+          <Target size={14}/><span>{version.configuration?.target_column||"No target"}</span>
+        </button>
+        <button type="button" onClick={()=>openRows("Reproducibility", [["Fingerprint", shortHash(version.fingerprint?.combined_fingerprint)||"N/A"],["Configuration hash", shortHash(version.configuration?.configuration_hash)||"N/A"],["Profile report", version.profile_report_id||"N/A"],["Ruleset", diagnosis.ruleset_version]], {fingerprint:version.fingerprint, configuration:version.configuration})}>
+          <FileStack size={14}/><span>{shortHash(version.fingerprint?.combined_fingerprint)||"No fingerprint"}</span>
+        </button>
+      </div>
+    </Card>
+
+    <section className="diagnosis-flow-section">
+      <div className="section-kicker"><p className="eyebrow">Dataset Quality</p><h2>Profiling evidence</h2></div>
+      <div className="smart-grid quality-grid">
+        <SmartCard icon={TableProperties} label="Rows / columns" value={`${summary.row_count??version.row_count} / ${summary.column_count??version.column_count}`} note={`${summary.numeric_columns??"N/A"} numeric - ${summary.categorical_columns??"N/A"} categorical`} onClick={()=>openRows("Shape and types", [["Rows", summary.row_count??version.row_count],["Columns", summary.column_count??version.column_count],["Numeric columns", summary.numeric_columns??"N/A"],["Categorical columns", summary.categorical_columns??"N/A"]], summary)} />
+        <SmartCard icon={AlertTriangle} label="Missingness" value={compactPct(summary.missing_ratio)} note={`${summary.missing_cells??0} cells - ${missingColumns.length} columns`} tone={summary.missing_ratio>.05?"medium":"low"} onClick={()=>setDetail({title:"Missingness", eyebrow:"Dataset Quality", raw:missingColumns, body:<div className="stack">{missingColumns.length?missingColumns.slice(0,12).map((row)=><MiniBar key={row.name} label={row.name} value={Number(row.missing_ratio)*100} max={100} tone="medium" />):<Notice>No missing values detected.</Notice>}</div>})} />
+        <SmartCard icon={Copy} label="Duplicates" value={summary.duplicate_rows??"N/A"} note={`${compactPct(summary.duplicate_ratio)} duplicate ratio`} tone={summary.duplicate_ratio>.01?"medium":"low"} onClick={()=>openRows("Duplicate evidence", [["Duplicate rows", summary.duplicate_rows??"N/A"],["Duplicate ratio", compactPct(summary.duplicate_ratio)]], summary)} />
+        <SmartCard icon={Gauge} label="Outliers" value={outlierColumns.length} note={outlierColumns[0]?`${outlierColumns[0].name} leads evidence`:"No numeric outlier signal"} tone={outlierColumns.length?"medium":"low"} onClick={()=>setDetail({title:"Outlier evidence", eyebrow:"Dataset Quality", raw:outlierColumns, body:<div className="stack">{outlierColumns.length?outlierColumns.slice(0,12).map((row)=><MiniBar key={row.name} label={row.name} value={Number(row.outlier_ratio)*100} max={100} tone="medium" />):<Notice>No outlier evidence detected.</Notice>}</div>})} />
+        <SmartCard icon={GitCompare} label="Correlation" value={highCorrelations.length} note={highCorrelations[0]?`${highCorrelations[0].left} / ${highCorrelations[0].right}`:"No high-correlation pairs"} tone={highCorrelations.length?"medium":"low"} onClick={()=>setDetail({title:"Correlation evidence", eyebrow:"Dataset Quality", raw:highCorrelations, body:<div className="stack">{highCorrelations.length?highCorrelations.slice(0,12).map((row)=><MiniBar key={`${row.left}-${row.right}`} label={`${row.left} / ${row.right}`} value={Math.abs(Number(row.correlation))*100} max={100} tone="medium" />):<Notice>No strong correlation pairs crossed the reporting threshold.</Notice>}</div>})} />
+        <SmartCard icon={Target} label="Target distribution" value={task.imbalance_ratio?`${metricValue(task.imbalance_ratio)}x`:"N/A"} note={task.minority_class?`Minority: ${task.minority_class}`:"Not computed"} tone={task.imbalance_ratio>=4?"high":task.imbalance_ratio?"low":"neutral"} onClick={()=>setDetail({title:"Target distribution", eyebrow:"Dataset Quality", raw:task, body:<ClassDistributionBars distribution={task.class_distribution} />})} />
+        <SmartCard icon={ScanSearch} label="Low information" value={lowInfoColumns.length} note={lowInfoColumns[0]?.name||"No constant feature evidence"} tone={lowInfoColumns.length?"medium":"low"} onClick={()=>openRows("Constant or low-information features", lowInfoColumns.length?lowInfoColumns.map((row)=>[row.name, `${row.unique_count} unique - ${compactPct(row.unique_ratio)}`]):[["Status","No constant or low-information features available"]], lowInfoColumns)} />
+      </div>
+    </section>
+
+    <section className="diagnosis-flow-section">
+      <div className="section-kicker"><p className="eyebrow">Diagnosis Metrics</p><h2>Risk scores and computed indicators</h2></div>
+      <div className="diagnosis-metric-stage">
+        <RiskGauge label="MLRS" value={diagnosis.mlrs_score} tone={riskTone(diagnosis.mlrs_score)} onClick={()=>setDetail({title:"MLRS component breakdown", eyebrow:"Diagnosis Metrics", raw:scoreBreakdown, body:<div className="stack">{Object.entries(mlrsComponents).map(([key,value])=><MiniBar key={key} label={key.replaceAll("_"," ")} value={value} max={25} tone={riskTone(value)} />)}</div>})} />
+        <RiskGauge label="LRS" value={diagnosis.lrs_score} tone={riskTone(diagnosis.lrs_score)} onClick={()=>setDetail({title:"LRS leakage evidence", eyebrow:"Diagnosis Metrics", raw:scoreBreakdown.leakage_evidence||lrsComponents, body:<div className="stack">{Object.entries(lrsComponents).map(([key,value])=><MiniBar key={key} label={key.replaceAll("_"," ")} value={value} max={35} tone={riskTone(value)} />)}</div>})} />
+        <SmartCard icon={GitBranch} label="SCM" value={semantic?displayMetric(semantic.scm_score):"Not computed"} note={semantic?"Semantic comparability":"Baseline or unavailable"} onClick={()=>openRows("SCM / semantic comparability", [["SCM", semantic?displayMetric(semantic.scm_score):"Not computed"],["Ruleset", semantic?.ruleset_version||"N/A"]], semantic)} />
+        <SmartCard icon={ScanSearch} label="DSI" value={semantic?displayMetric(semantic.dsi_score):"Not computed"} note={semantic?"Dataset shift indicator":"Baseline or unavailable"} onClick={()=>openRows("DSI / dataset shift", [["DSI", semantic?displayMetric(semantic.dsi_score):"Not computed"],["Missingness delta", semantic?.report?.missing_ratio_change!=null?signedPct(semantic.report.missing_ratio_change):"N/A"],["Duplicate delta", semantic?.report?.duplicate_rows?.delta??"N/A"]], semantic)} />
+        <SmartCard icon={Zap} label="VRS" value={variantRecord?.vrs_score!=null?displayMetric(variantRecord.vrs_score):"N/A"} note={variantRecord?`${variantRecord.pipeline_id} - rank ${variantRecord.vrs_rank||"N/A"}`:"Only variant-generated versions"} tone={variantRecord?.vrs_score>=80?"low":variantRecord?.vrs_score?"medium":"neutral"} onClick={()=>openRows("VRS variant evidence", [["Pipeline", variantRecord?.pipeline_id||"N/A"],["VRS", variantRecord?.vrs_score!=null?displayMetric(variantRecord.vrs_score):"N/A"],["Rank", variantRecord?.vrs_rank||"N/A"],["Goal", variantRecord?.goal_satisfaction||"N/A"],["MLRS before", displayMetric(variantRecord?.mlrs_before)],["MLRS after", displayMetric(variantRecord?.mlrs_after)],["LRS after", displayMetric(variantRecord?.lrs_after)]], variantRecord)} />
+        <SmartCard icon={AlertTriangle} label="Findings" value={diagnosis.findings.length} note={`${contract?.readiness?.status||"Diagnosis loaded"}`} tone={diagnosis.findings.length?"medium":"low"} onClick={()=>setDetail({title:"Severity distribution", eyebrow:"Diagnosis Metrics", raw:diagnosis.findings, body:<SeverityStrip findings={diagnosis.findings} />})} />
+      </div>
+    </section>
+
+    <section className="diagnosis-flow-section">
+      <div className="section-kicker"><p className="eyebrow">Risk Explorer</p><h2>Findings</h2></div>
+      {!diagnosis.findings.length?<Notice>No material risk crossed the configured deterministic thresholds.</Notice>:<div className="risk-explorer-grid">{diagnosis.findings.map((item)=><button type="button" key={item.code} className={`risk-tile ${item.severity}`} onClick={()=>setDetail({title:item.issue, eyebrow:item.code, subtitle:item.risk, raw:item.evidence, body:<div className="stack"><MiniEvidenceList title="Finding" rows={[["Severity", item.severity],["Risk", item.risk],["Recommendation", item.recommendation],["Columns", DiagnosisFindingColumns(item).join(", ")||"Dataset-level"]]} /></div>})}><div><strong>{item.issue}</strong><Badge tone={item.severity}>{item.severity}</Badge></div><p>{item.recommendation}</p></button>)}</div>}
+    </section>
+
+    <section className="diagnosis-flow-section">
+      <div className="section-kicker"><p className="eyebrow">Risk Map</p><h2>Feature x risk matrix</h2></div>
+      <RiskHeatmap findings={diagnosis.findings} contract={contract} onInspect={setDetail} />
+    </section>
+
+    <section className="diagnosis-two-column">
+      <Card>
+        <p className="eyebrow">Interventions</p><h2>Evidence-triggered actions</h2>
+        {!contract?.intervention_options?.length?<Empty>No intervention options were generated from the current diagnosis.</Empty>:<div className="intervention-list compact">{contract.intervention_options.map((option)=><button type="button" className={`intervention-card compact ${selectedOptions.includes(option.id)?"selected":""}`} key={option.id} onClick={()=>setDetail({title:option.title, eyebrow:"Intervention", subtitle:option.objective, raw:option, body:<div className="stack"><MiniEvidenceList title="Triggered by" rows={option.source_findings.map((item)=>[item, option.triggered_by.join(", ")])} /><MiniEvidenceList title="Operations" rows={option.operations.map((op)=>[op.operation.replaceAll("_"," "), op.purpose])} /><MetricImpactPreview impact={option.metric_impact} /></div>})}><span><input type="checkbox" checked={selectedOptions.includes(option.id)} onChange={(event)=>{event.stopPropagation();toggleOption(option.id);}} /> <strong>{option.title}</strong></span><Badge tone={option.severity}>{option.status}</Badge></button>)}</div>}
+      </Card>
+      <Card>
+        <p className="eyebrow">Human Decisions</p><h2>Approvals before generation</h2>
+        {!contract?.human_decisions?.length?<Notice>No user approvals are required by the current intervention plan.</Notice>:<div className="decision-list compact">{contract.human_decisions.map((item,index)=><button type="button" key={`${item.finding_code}-${index}`} onClick={()=>setDetail({title:item.question, eyebrow:"Human decision", raw:item, body:<MiniEvidenceList title="Decision impact" rows={[["Default", item.recommended_default],["Accepting", item.consequence_accept],["Rejecting", item.consequence_reject],["Scope", item.affected_columns.join(", ")||"Dataset-level"]]} />})}><strong>{item.question}</strong><span>{item.recommended_default}</span></button>)}</div>}
+      </Card>
+    </section>
+
+    <section className="diagnosis-plan-evidence-grid">
+      <Card className="sticky-variant-plan">
+        <p className="eyebrow">Variant Plan</p><h2>Generator-ready plan</h2>
+        <div className="context-list">
+          <div className="context-row"><strong>Selected options</strong><span>{selected.length}</span></div>
+          <div className="context-row"><strong>Total operations</strong><span>{selectedOps.length}</span></div>
+          <div className="context-row"><strong>Affected columns</strong><span>{[...new Set(selectedOps.flatMap((item)=>item.columns||[]))].join(", ")||"Dataset-level"}</span></div>
+          <div className="context-row"><strong>Baseline</strong><span>{contract?.experiment_handoff?.required_baseline||`V${version.version_number}`}</span></div>
+          <div className="context-row"><strong>Recommended metrics</strong><span>{contract?.experiment_handoff?.recommended_metrics?.join(", ")||"Primary metric"}</span></div>
+        </div>
+        <Button id="open-variant-generator-btn" onClick={onOpenVariants} disabled={!onOpenVariants}><Zap size={14}/>Generate Variants</Button>
+      </Card>
+      <div className="stack">
+        <Card>
+          <p className="eyebrow">Evidence</p><h2>Reproducible outputs</h2>
+          <div className="smart-grid evidence-grid">
+            <SmartCard icon={FileStack} label="Fingerprint" value={shortHash(version.fingerprint?.combined_fingerprint)||"N/A"} note={version.fingerprint?.algorithm_version||"N/A"} onClick={()=>openRows("Fingerprint", [["File hash", shortHash(version.fingerprint?.file_hash)||"N/A"],["Schema hash", shortHash(version.fingerprint?.schema_hash)||"N/A"],["Metadata hash", shortHash(version.fingerprint?.metadata_hash)||"N/A"],["Combined", shortHash(version.fingerprint?.combined_fingerprint)||"N/A"]], version.fingerprint)} />
+            <SmartCard icon={ClipboardCheck} label="Interventions" value={contract?.readiness?.intervention_count??0} note={`${contract?.readiness?.required_decision_count??0} decisions`} onClick={()=>openRows("Intervention readiness", [["Status", contract?.readiness?.status||"N/A"],["Interventions", contract?.readiness?.intervention_count??0],["Required decisions", contract?.readiness?.required_decision_count??0],["Finding count", contract?.readiness?.finding_count??diagnosis.findings.length]], contract?.readiness)} />
+            <SmartCard icon={Network} label="Lineage" value={version.parent_version_id?`V${version.parent_version_id} -> V${version.version_number}`:"Baseline"} note={methodLabel(version)} onClick={()=>openRows("Lineage", [["Parent", version.parent_version_id||"Baseline"],["Version", `V${version.version_number}`],["Generation", methodLabel(version)],["Notes", version.version_notes||"N/A"]], version)} />
+          </div>
+          <details className="debug-disclosure"><summary>Advanced/debug evidence matrix</summary><DiagnosisEvidenceSummary version={version} profile={profile} diagnosis={diagnosis} contract={contract} /></details>
+        </Card>
+        <DiagnosisLLMReport report={diagnosisReport} status={diagnosisReportStatus} />
+      </div>
+    </section>
+
+    <Card>
+      <p className="eyebrow">Export / report section</p><h2>Structured outputs</h2>
+      <div className="action-stack horizontal"><Button onClick={exportReport}><FileCheck2 size={15}/>Professional DOCX report</Button><Button variant="secondary" disabled={!contract} onClick={exportContract}><Copy size={15}/>Diagnosis contract JSON</Button></div>
+    </Card>
+    <DetailDrawer detail={detail} onClose={()=>setDetail(null)} />
+  </div>;
+}
+
+function LegacyDiagnosisPanel({ study, datasets = [], version, profile, diagnosis, initialContract = null, onVersion, onOpenVariants }) {
   const [contract,setContract]=useState(initialContract);
   const [status,setStatus]=useState("");
   const [diagnosisReport,setDiagnosisReport]=useState(null);

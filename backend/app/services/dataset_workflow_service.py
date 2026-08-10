@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import pandas as pd
@@ -14,6 +15,8 @@ from app.services.profiling_service import ProfilingService
 from app.services.semantic_diff_service import SemanticDiffService
 from app.storage.local_storage import LocalFileStorage
 from app.utilities.hashing import canonical_hash
+
+logger = logging.getLogger(__name__)
 
 
 class DatasetWorkflowService:
@@ -148,6 +151,152 @@ class DatasetWorkflowService:
         ))
         self.db.commit()
         self.storage.delete_version_file(file_path)
+
+    def run_diagnosis(self, study: Study, user_id: int | None, version_id: int, recompute: bool = False, generate_ai: bool = False) -> DatasetVersion:
+        version = self.db.query(DatasetVersion).join(Dataset).filter(
+            DatasetVersion.id == version_id,
+            Dataset.study_id == study.id,
+        ).first()
+        if not version:
+            raise ValueError("Dataset version not found")
+
+        semantic_row = self._ensure_semantic_report(version, recompute=recompute)
+        profile = self.db.query(DatasetProfileReport).filter(DatasetProfileReport.version_id == version.id).first()
+        diagnosis = self.db.query(DiagnosisReport).filter(DiagnosisReport.version_id == version.id).first()
+        if profile and diagnosis and not recompute:
+            self.db.commit()
+            if generate_ai:
+                self._generate_ai_interpretations(study, version, diagnosis)
+            return version
+
+        configuration = self.db.get(DatasetConfiguration, version.configuration_id)
+        if not configuration:
+            raise ValueError("Dataset configuration not found")
+
+        config = {
+            "target_column": configuration.target_column,
+            "primary_metric": configuration.primary_metric,
+            "validation_strategy": configuration.validation_strategy,
+            "feature_selection_mode": configuration.feature_selection_mode,
+            "selected_features": configuration.selected_features_json,
+            "scaling_strategy": configuration.scaling_strategy,
+        }
+        frame = pd.read_csv(version.immutable_file_path)
+        profile_payload = ProfilingService().profile(frame, study.ml_task, config)
+
+        if profile:
+            profile.report_json = profile_payload
+            profile.configuration_id = configuration.id
+            profile.profiler_version = ProfilingService.profiler_version
+        else:
+            profile = DatasetProfileReport(
+                version_id=version.id,
+                configuration_id=configuration.id,
+                report_json=profile_payload,
+                profiler_version=ProfilingService.profiler_version,
+            )
+            self.db.add(profile)
+            self.db.flush()
+
+        semantic_payload = self._semantic_payload(semantic_row)
+        diagnosis_payload = DiagnosisService().diagnose(
+            profile_payload,
+            semantic_payload,
+            {
+                "source_version_id": version.parent_version_id,
+                "version_number": version.version_number,
+                "version_notes": version.version_notes,
+            },
+            config,
+        )
+
+        if diagnosis:
+            diagnosis.profile_report_id = profile.id
+            diagnosis.findings_json = diagnosis_payload["findings"]
+            diagnosis.mlrs_score = diagnosis_payload["mlrs_score"]
+            diagnosis.lrs_score = diagnosis_payload["lrs_score"]
+            diagnosis.ruleset_version = diagnosis_payload["ruleset_version"]
+        else:
+            diagnosis = DiagnosisReport(
+                version_id=version.id,
+                profile_report_id=profile.id,
+                findings_json=diagnosis_payload["findings"],
+                mlrs_score=diagnosis_payload["mlrs_score"],
+                lrs_score=diagnosis_payload["lrs_score"],
+                ruleset_version=diagnosis_payload["ruleset_version"],
+            )
+            self.db.add(diagnosis)
+            self.db.flush()
+
+        action = "diagnosis.recomputed" if recompute else "diagnosis.generated"
+        self.db.add(ActivityLog(study_id=study.id, actor_id=user_id, action=action, entity_type="dataset_version", entity_id=version.id, details_json={"version_number": version.version_number, "mlrs": diagnosis_payload["mlrs_score"], "lrs": diagnosis_payload["lrs_score"]}))
+        self.db.add(ActivityLog(study_id=study.id, actor_id=user_id, action="diagnosis.score_breakdown", entity_type="diagnosis_report", entity_id=diagnosis.id, details_json=diagnosis_payload["score_breakdown"]))
+        self.db.commit()
+        self.db.refresh(version)
+        if generate_ai:
+            self._generate_ai_interpretations(study, version, diagnosis)
+        return version
+
+    def _ensure_semantic_report(self, version: DatasetVersion, recompute: bool = False) -> SemanticDiffReport | None:
+        if not version.parent_version_id:
+            return None
+        existing = self.db.query(SemanticDiffReport).filter(SemanticDiffReport.current_version_id == version.id).first()
+        if existing and not recompute and existing.ruleset_version == SemanticDiffService.ruleset_version:
+            return existing
+        previous = self.db.get(DatasetVersion, version.parent_version_id)
+        if not previous:
+            return None
+        configuration = self.db.get(DatasetConfiguration, version.configuration_id)
+        diff = SemanticDiffService().compare(
+            pd.read_csv(previous.immutable_file_path),
+            pd.read_csv(version.immutable_file_path),
+            configuration.target_column if configuration else None,
+        )
+        if existing:
+            existing.previous_version_id = previous.id
+            existing.report_json = diff["report"]
+            existing.scm_score = diff["scm_score"]
+            existing.dsi_score = diff["dsi_score"]
+            existing.ruleset_version = diff["ruleset_version"]
+            self.db.flush()
+            return existing
+        record = SemanticDiffReport(
+            previous_version_id=previous.id,
+            current_version_id=version.id,
+            report_json=diff["report"],
+            scm_score=diff["scm_score"],
+            dsi_score=diff["dsi_score"],
+            ruleset_version=diff["ruleset_version"],
+        )
+        self.db.add(record)
+        self.db.flush()
+        return record
+
+    @staticmethod
+    def _semantic_payload(report: SemanticDiffReport | None) -> dict | None:
+        if not report:
+            return None
+        return {
+            "scm_score": report.scm_score,
+            "dsi_score": report.dsi_score,
+            "ruleset_version": report.ruleset_version,
+            "report": report.report_json,
+        }
+
+    def _generate_ai_interpretations(self, study: Study, version: DatasetVersion, diagnosis: DiagnosisReport) -> None:
+        try:
+            from app.api.routes.ai import resolve_evidence
+            from app.services.ai_explanation_service import AIExplanationService
+
+            service = AIExplanationService(self.db)
+            diagnosis_evidence = resolve_evidence(self.db, study, "diagnosis_report_interpretation", version.id)
+            service.explain(study, "diagnosis_report_interpretation", diagnosis.id, diagnosis_evidence)
+            executive_evidence = resolve_evidence(self.db, study, "dataset_executive_summary", version.id)
+            service.explain(study, "dataset_executive_summary", version.id, executive_evidence)
+            report_evidence = resolve_evidence(self.db, study, "dataset_explanation_report", version.id)
+            service.explain(study, "dataset_explanation_report", version.id, report_evidence)
+        except Exception as exc:
+            logger.info("Skipping automatic AI interpretation for version %s: %s", version.id, exc)
 
     def refresh_semantic_report(self, report: SemanticDiffReport) -> bool:
         # Metric reports are historical evidence; new algorithms apply to new comparisons only.

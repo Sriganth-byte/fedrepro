@@ -735,3 +735,32 @@ No database or API changes. Full CSS design system rewrite with:
 - `WorkspacePanels.jsx` upgraded to use new UI primitives (Skeleton, CopyButton, StatusDot)
 
 Full reference: `docs/UI_REFERENCE.md`
+
+### Refinement #4 - Diagnosis Dashboard And Evidence Warmup (2026-08-11)
+
+The Diagnosis workspace was upgraded into a compact research dashboard with smart figures, clickable evidence cards, and a fixed detail workspace. The page now follows:
+
+`Dataset Quality -> Diagnosis Metrics -> Risk Explorer -> Risk Map -> Interventions -> Human Decisions -> Variant Plan -> Evidence -> AI Explanation`
+
+Backend support was added for explicit per-version diagnosis execution:
+
+- `POST /api/versions/{version_id}/diagnosis/run`
+- `recompute=false` for first run
+- `recompute=true` for stale evidence repair
+
+The backend now reports per-version `diagnosis_status` so the UI can show `Not Diagnosed`, `Diagnosed`, or `Recompute Available`.
+
+Startup warmup was added through `EvidenceWarmupService`. It checks every dataset version and fills missing or stale profile, diagnosis, semantic, report, and optional AI evidence. This includes variant-generated versions.
+
+Current deterministic algorithm versions:
+
+- `fingerprint-1.0`
+- `profile-1.0`
+- `semantic-2.0`
+- `diagnosis-2.0`
+- `explanation-2.0`
+
+Current UI/user documentation:
+
+- `docs/UI_REFERENCE.md`
+- `docs/UI_PAGE_GUIDE.md`

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.dependencies import get_current_user
 from app.core.database import get_db
-from app.models.entities import ActivityLog, Dataset, DatasetConfiguration, DatasetProfileReport, DatasetRegistration, DatasetVersion, DiagnosisReport, SemanticDiffReport, User
+from app.models.entities import ActivityLog, Dataset, DatasetConfiguration, DatasetProfileReport, DatasetRegistration, DatasetVersion, DiagnosisReport, SemanticDiffReport, User, VariantGenerationRecord
 from app.repositories.sqlalchemy import DatasetRepository
 from app.schemas.contracts import ConfigurationCreate
 from app.services.dataset_workflow_service import DatasetWorkflowService
@@ -17,6 +17,8 @@ from app.services.dataset_explanation_report_service import DatasetExplanationRe
 from app.services.diagnosis_contract_service import DiagnosisContractService
 from app.services.diagnosis_report_service import DiagnosisReportExportService
 from app.services.fingerprint_service import FingerprintService
+from app.services.diagnosis_service import DiagnosisService
+from app.services.profiling_service import ProfilingService
 from app.services.semantic_diff_service import SemanticDiffService
 from app.api.routes.ai import resolve_evidence
 from app.services.ai_explanation_service import AIExplanationService
@@ -171,24 +173,22 @@ def version_analysis(version_id: int, db: Session = Depends(get_db), user: User 
     diagnosis_row = db.query(DiagnosisReport).filter(
         DiagnosisReport.version_id == selected.id
     ).first()
-    if not profile_row or not diagnosis_row:
-        raise ValueError("Version analysis is incomplete")
-
     return {
         "version": version_bundle(db, selected),
-        "profile": {
+        "profile": None if not profile_row else {
             "id": profile_row.id,
             "version_id": selected.id,
             "profiler_version": profile_row.profiler_version,
             "report": profile_row.report_json,
             "created_at": profile_row.created_at,
         },
-        "diagnosis": {
+        "diagnosis": None if not diagnosis_row else {
             "id": diagnosis_row.id,
             "version_id": selected.id,
             "findings": diagnosis_row.findings_json,
             "mlrs_score": diagnosis_row.mlrs_score,
             "lrs_score": diagnosis_row.lrs_score,
+            "score_breakdown": _latest_score_breakdown(db, diagnosis_row.id),
             "ruleset_version": diagnosis_row.ruleset_version,
             "created_at": diagnosis_row.created_at,
         },
@@ -201,6 +201,19 @@ def version_analysis(version_id: int, db: Session = Depends(get_db), user: User 
             "semantic_diff": diffs.get(item.id),
         } for item in versions],
     }
+
+
+@router.post("/versions/{version_id}/diagnosis/run", status_code=201)
+def run_diagnosis(version_id: int, recompute: bool = Query(False), db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    version = db.query(DatasetVersion).join(Dataset).filter(
+        DatasetVersion.id == version_id,
+        Dataset.study.has(owner_id=user.id),
+    ).first()
+    if not version:
+        raise ValueError("Dataset version not found")
+    study = StudyService(db).get_owned(version.dataset.study_id, user.id)
+    DatasetWorkflowService(db).run_diagnosis(study, user.id, version_id, recompute=recompute)
+    return version_analysis(version_id, db, user)
 
 
 @router.delete("/versions/{version_id}", status_code=204)
@@ -439,6 +452,22 @@ def _latest_score_breakdown(db: Session, diagnosis_report_id: int):
     return report.details_json if report else None
 
 
+def _diagnosis_status(version, profile_row, diagnosis_row, semantic_row=None):
+    if not diagnosis_row:
+        return "Not Diagnosed"
+    if not profile_row:
+        return "Recompute Available"
+    if profile_row.profiler_version != ProfilingService.profiler_version:
+        return "Recompute Available"
+    if diagnosis_row.ruleset_version != DiagnosisService.ruleset_version:
+        return "Recompute Available"
+    if version.parent_version_id and not semantic_row:
+        return "Recompute Available"
+    if semantic_row and semantic_row.ruleset_version != SemanticDiffService.ruleset_version:
+        return "Recompute Available"
+    return "Diagnosed"
+
+
 def registration_payload(item):
     return {"id": item.id, "dataset_id": item.dataset_id, "original_filename": item.original_filename, "file_size": item.file_size, "version_notes": item.version_notes, "metadata": item.metadata_json, "validation": item.validation_json, "status": item.status, "created_at": item.created_at}
 
@@ -447,6 +476,10 @@ def dataset_payload(item, db: Session | None = None):
     versions = []
     for row in item.versions:
         configuration = db.get(DatasetConfiguration, row.configuration_id) if db else None
+        profile_row = db.query(DatasetProfileReport).filter(DatasetProfileReport.version_id == row.id).first() if db else None
+        diagnosis_row = db.query(DiagnosisReport).filter(DiagnosisReport.version_id == row.id).first() if db else None
+        semantic_row = db.query(SemanticDiffReport).filter(SemanticDiffReport.current_version_id == row.id).first() if db else None
+        diagnosis_status = _diagnosis_status(row, profile_row, diagnosis_row, semantic_row)
         versions.append({
             "id": row.id,
             "registration_id": row.registration_id,
@@ -457,6 +490,8 @@ def dataset_payload(item, db: Session | None = None):
             "file_hash": row.file_hash,
             "version_notes": row.version_notes,
             "generation_method": row.generation_method,
+            "diagnosis_status": diagnosis_status,
+            "diagnosis": None if not diagnosis_row else {"id": diagnosis_row.id, "mlrs_score": diagnosis_row.mlrs_score, "lrs_score": diagnosis_row.lrs_score, "finding_count": len(diagnosis_row.findings_json)},
             "configuration": None if not configuration else {
                 "id": configuration.id,
                 "task_type": configuration.task_type,
@@ -484,4 +519,6 @@ def version_bundle(db, version):
     profile_row = db.query(DatasetProfileReport).filter(DatasetProfileReport.version_id == version.id).first()
     diagnosis_row = db.query(DiagnosisReport).filter(DiagnosisReport.version_id == version.id).first()
     score_breakdown = _latest_score_breakdown(db, diagnosis_row.id) if diagnosis_row else None
-    return {"id": version.id, "dataset_id": version.dataset_id, "version_number": version.version_number, "parent_version_id": version.parent_version_id, "version_notes": version.version_notes, "file_hash": version.file_hash, "row_count": version.row_count, "column_count": version.column_count, "generation_method": version.generation_method, "configuration": {"id": configuration.id, "task_type": configuration.task_type, "target_column": configuration.target_column, "primary_metric": configuration.primary_metric, "validation_strategy": configuration.validation_strategy, "feature_selection_mode": configuration.feature_selection_mode, "selected_features": configuration.selected_features_json, "scaling_strategy": configuration.scaling_strategy, "configuration_hash": configuration.configuration_hash}, "fingerprint": {"file_hash": version.fingerprint.file_hash, "schema_hash": version.fingerprint.schema_hash, "metadata_hash": version.fingerprint.metadata_hash, "combined_fingerprint": version.fingerprint.combined_fingerprint, "algorithm_version": version.fingerprint.algorithm_version}, "semantic_diff": None if not diff else semantic_payload(diff), "profile_report_id": profile_row.id if profile_row else None, "diagnosis": None if not diagnosis_row else {"id": diagnosis_row.id, "mlrs_score": diagnosis_row.mlrs_score, "lrs_score": diagnosis_row.lrs_score, "finding_count": len(diagnosis_row.findings_json), "score_breakdown": score_breakdown, "mlrs_components": (score_breakdown or {}).get("mlrs_components"), "lrs_components": (score_breakdown or {}).get("lrs_components")}, "created_at": version.created_at}
+    variant_record = db.query(VariantGenerationRecord).filter(VariantGenerationRecord.variant_version_id == version.id).order_by(VariantGenerationRecord.created_at.desc()).first()
+    diagnosis_status = _diagnosis_status(version, profile_row, diagnosis_row, diff)
+    return {"id": version.id, "dataset_id": version.dataset_id, "version_number": version.version_number, "parent_version_id": version.parent_version_id, "version_notes": version.version_notes, "file_hash": version.file_hash, "row_count": version.row_count, "column_count": version.column_count, "generation_method": version.generation_method, "diagnosis_status": diagnosis_status, "configuration": {"id": configuration.id, "task_type": configuration.task_type, "target_column": configuration.target_column, "primary_metric": configuration.primary_metric, "validation_strategy": configuration.validation_strategy, "feature_selection_mode": configuration.feature_selection_mode, "selected_features": configuration.selected_features_json, "scaling_strategy": configuration.scaling_strategy, "configuration_hash": configuration.configuration_hash}, "fingerprint": {"file_hash": version.fingerprint.file_hash, "schema_hash": version.fingerprint.schema_hash, "metadata_hash": version.fingerprint.metadata_hash, "combined_fingerprint": version.fingerprint.combined_fingerprint, "algorithm_version": version.fingerprint.algorithm_version}, "semantic_diff": None if not diff else semantic_payload(diff), "profile_report_id": profile_row.id if profile_row else None, "variant_record": None if not variant_record else {"id": variant_record.id, "job_id": variant_record.job_id, "pipeline_id": variant_record.pipeline_id, "vrs_score": variant_record.vrs_score, "vrs_rank": variant_record.vrs_rank, "goal_satisfaction": variant_record.goal_satisfaction, "mlrs_before": variant_record.mlrs_before, "mlrs_after": variant_record.mlrs_after, "lrs_after": variant_record.lrs_after, "steps": variant_record.pipeline_steps_json or [], "explanation": variant_record.explanation_json or {}}, "diagnosis": None if not diagnosis_row else {"id": diagnosis_row.id, "mlrs_score": diagnosis_row.mlrs_score, "lrs_score": diagnosis_row.lrs_score, "finding_count": len(diagnosis_row.findings_json), "score_breakdown": score_breakdown, "mlrs_components": (score_breakdown or {}).get("mlrs_components"), "lrs_components": (score_breakdown or {}).get("lrs_components")}, "created_at": version.created_at}

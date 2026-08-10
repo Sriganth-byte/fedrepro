@@ -22,9 +22,11 @@ from app.models.entities import (
     DatasetVersion,
     DiagnosisReport,
     LineageEvent,
+    Study,
     VariantGenerationJob,
     VariantGenerationRecord,
 )
+from app.services.dataset_workflow_service import DatasetWorkflowService
 from app.services.explanation_engine_service import ExplanationEngineService
 from app.services.fingerprint_service import FingerprintService
 from app.services.issue_interpreter_service import IssueInterpreterService
@@ -351,6 +353,9 @@ class VariantGeneratorOrchestrator:
             },
         ))
         db.flush()
+        study = db.get(Study, dataset.study_id)
+        if study:
+            DatasetWorkflowService(db).run_diagnosis(study, None, version.id, generate_ai=True)
         return version
 
 

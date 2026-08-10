@@ -8,7 +8,10 @@ from fastapi.testclient import TestClient
 from app.api.routes.ai import resolve_evidence
 from app.core.database import SessionLocal
 from app.main import app
-from app.models.entities import DatasetVersion, Study, User
+from app.models.entities import DatasetVersion, DiagnosisReport, SemanticDiffReport, Study, User
+from app.services.diagnosis_service import DiagnosisService
+from app.services.evidence_warmup_service import EvidenceWarmupService
+from app.services.semantic_diff_service import SemanticDiffService
 
 
 def test_ollama_model_probe_routes_do_not_404():
@@ -19,6 +22,13 @@ def test_ollama_model_probe_routes_do_not_404():
         payload = response.json()
         assert payload["object"] == "list"
         assert payload["data"][0]["id"]
+
+
+def test_version_route_reports_api_metadata():
+    client = TestClient(app)
+    response = client.get("/api/version")
+    assert response.status_code == 200
+    assert response.json() == {"service": "FedRepro", "version": "1.0.0", "api_prefix": "/api"}
 
 
 def test_complete_phase_one_api_workflow(tmp_path):
@@ -94,6 +104,10 @@ def test_complete_phase_one_api_workflow(tmp_path):
         assert diagnosis.status_code == 200
         assert diagnosis.json()["ruleset_version"] == "diagnosis-2.0"
         assert "score_breakdown" in diagnosis.json()
+        rerun = client.post(f"/api/versions/{version['id']}/diagnosis/run", headers=headers, params={"recompute": True})
+        assert rerun.status_code == 201, rerun.text
+        assert rerun.json()["diagnosis"]["version_id"] == version["id"]
+        assert rerun.json()["version"]["diagnosis_status"] == "Diagnosed"
         analysis = client.get(f"/api/versions/{version['id']}/analysis", headers=headers)
         assert analysis.status_code == 200, analysis.text
         assert analysis.json()["version"]["id"] == version["id"]
@@ -122,6 +136,26 @@ def test_complete_phase_one_api_workflow(tmp_path):
         assert version_v2_response.status_code == 201, version_v2_response.text
         version_v2 = version_v2_response.json()
         assert version_v2["version_number"] == 2
+        with SessionLocal() as db:
+            semantic_row = db.query(SemanticDiffReport).filter(SemanticDiffReport.current_version_id == version_v2["id"]).first()
+            diagnosis_row = db.query(DiagnosisReport).filter(DiagnosisReport.version_id == version_v2["id"]).first()
+            assert semantic_row
+            assert diagnosis_row
+            semantic_row.ruleset_version = "semantic-legacy"
+            semantic_row.scm_score = 0
+            semantic_row.dsi_score = 0
+            diagnosis_row.ruleset_version = "diagnosis-legacy"
+            db.commit()
+            warmup = EvidenceWarmupService(db)
+            warmup.settings.ai_enabled = False
+            summary = warmup.warm_all()
+            assert summary["diagnosis_generated"] >= 1
+            db.refresh(semantic_row)
+            db.refresh(diagnosis_row)
+            assert semantic_row.ruleset_version == SemanticDiffService.ruleset_version
+            assert diagnosis_row.ruleset_version == DiagnosisService.ruleset_version
+            assert semantic_row.scm_score is not None
+            assert semantic_row.dsi_score is not None
         analysis_v2 = client.get(f"/api/versions/{version_v2['id']}/analysis", headers=headers)
         assert analysis_v2.status_code == 200, analysis_v2.text
         assert [item["version_number"] for item in analysis_v2.json()["timeline"]] == [1, 2]

@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     ai_enabled: bool = False
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.1:latest"
+    evidence_warmup_on_startup: bool = True
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

@@ -261,3 +261,42 @@ frontend/src/api/client.js                                      [MODIFIED] +vari
 frontend/src/features/studies/WorkspacePanels.jsx               [MODIFIED] +VariantGeneratorPanel
 frontend/src/styles.css                                         [MODIFIED] +variant panel CSS
 ```
+
+---
+
+## 9. Current Update: Diagnosis And Startup Evidence Integration (2026-08-11)
+
+The Variant Generator is now integrated with the same per-version diagnosis and evidence warmup workflow used by manual dataset versions.
+
+### Current behavior
+
+- A generated variant is registered as a normal immutable `DatasetVersion`.
+- The variant version receives a synthetic `DatasetRegistration`.
+- The variant version receives a copied `DatasetConfiguration`.
+- The variant version receives a `DatasetFingerprint`.
+- The variant version receives parent-linked semantic SCM/DSI evidence.
+- The variant version receives profile and diagnosis evidence through `DatasetWorkflowService.run_diagnosis()`.
+- The variant version can receive AI diagnosis interpretation, executive summary, and dataset explanation report when AI is enabled.
+- The Diagnosis page displays VRS through the linked `VariantGenerationRecord`.
+
+### Invariant
+
+Variant versions must not be treated as a separate evidence type in the UI. Once saved, they are first-class dataset versions and must support:
+
+- version selector visibility
+- diagnosis status
+- `Run Diagnosis`
+- `Recompute Diagnosis`
+- profile report
+- diagnosis report
+- SCM/DSI when a parent exists
+- MLRS/LRS
+- VRS when linked to a variant record
+- fingerprint and recreation evidence
+- AI explanations and reports when enabled
+
+### Startup repair
+
+`EvidenceWarmupService` scans variant-generated versions on startup exactly like manual versions. If a variant version is missing profile, diagnosis, semantic evidence, deterministic report payload, or AI cache, the warmup process fills it and saves it for quick rendering.
+
+If SCM/DSI or diagnosis rows exist but were produced by stale ruleset versions, the warmup path recomputes them using the existing deterministic services. No metric formulas were changed by this integration.

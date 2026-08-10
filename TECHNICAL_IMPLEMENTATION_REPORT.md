@@ -139,7 +139,7 @@ DSI = 100 × (0.45 × average numeric distribution shift
            + 0.20 × proportional row change)
 ```
 
-The implementation is deterministic and versioned as `semantic-1.0`. The method is intentionally lightweight: numeric shift is standardized mean movement rather than a statistical distance or hypothesis test, and categorical feature shift is only calculated for the configured target.
+The current implementation is deterministic and versioned as `semantic-2.0`. It tracks schema movement, row-content change, duplicate deltas, missingness deltas, numeric distribution movement, categorical distribution movement, target distribution movement, and component-level SCM/DSI evidence.
 
 ### 5.6 Profiling
 
@@ -179,7 +179,7 @@ LRS = min(100,
         + min(35, DSI × 0.35))
 ```
 
-The ruleset is stored as `diagnosis-1.0`. Scores are transparent prioritization aids; they should not be interpreted as calibrated probabilities.
+The current ruleset is stored as `diagnosis-2.0`. Scores are transparent prioritization aids; they should not be interpreted as calibrated probabilities.
 
 ### 5.8 Optional AI explanation
 
@@ -319,3 +319,52 @@ Future variant generation or model experiments should reference immutable versio
 FedRepro Phase 1 implements its stated evidence-management objective. Its central design choices—immutable dataset versions, canonical fingerprints, explicit lineage, deterministic and versioned analysis, structured findings, and evidence-bound optional AI—create a credible foundation for reproducible ML research.
 
 The system is ready for continued research use and Phase 2 development. Production readiness depends on operational and security hardening, broader automated verification, and a scalable execution/storage model rather than a redesign of the core domain.
+
+---
+
+## 13. Current System Addendum (2026-08-11)
+
+This report is historical for the original Phase 1 assessment. The current system has advanced beyond the earlier snapshot.
+
+### Current capabilities now implemented
+
+- Study configuration completeness, protocol lineage, and protocol diff endpoints.
+- Variant Generator with deterministic pipeline planning, VRS scoring, and immutable version promotion.
+- Minimalist Diagnosis dashboard with compact cards, smart figures, risk map, intervention planning, and click-to-open detail workspace.
+- Explicit per-version `Run Diagnosis` and `Recompute Diagnosis` route.
+- Per-version diagnosis status in dataset/version payloads.
+- Startup evidence warmup for all studies and dataset versions.
+- AI explanation prompt/cache version upgraded to `explanation-2.0`.
+- Semantic ruleset upgraded to `semantic-2.0`.
+- Diagnosis ruleset is `diagnosis-2.0`.
+- Backend test suite expanded to 59 tests.
+
+### Startup evidence warmup
+
+FastAPI lifespan startup launches `EvidenceWarmupService` when `EVIDENCE_WARMUP_ON_STARTUP=true`.
+
+The warmup service checks all persisted dataset versions and repairs missing/stale evidence:
+
+- profile evidence
+- diagnosis evidence
+- semantic SCM/DSI evidence
+- deterministic version report payloads
+- AI diagnosis interpretations
+- AI executive summaries
+- AI dataset explanation reports
+- AI version analyses
+- AI semantic metric and semantic diff interpretations
+
+Warmup is cache-aware and uses persisted evidence hashes. It does not silently change deterministic formulas.
+
+### Variant version behavior
+
+Generated variants are now treated as normal immutable dataset versions once saved. They receive fingerprint, lineage, semantic diff, profile, diagnosis, report, optional AI evidence, and VRS linkage.
+
+### Current verification
+
+Latest local verification:
+
+- Backend: 59 passed
+- Frontend: `npm.cmd run build` passed
+- Known frontend warning: webpack entrypoint size is slightly above the default recommendation

@@ -138,6 +138,7 @@ export default function StudyWorkspace() {
                  study={study} datasets={datasets} version={version}
                  profile={profile} diagnosis={diagnosis}
                  initialContract={diagnosisContract}
+                 versionStatus={versionStatus}
                  onVersion={id => selectVersion(id, "diagnosis")}
                  onOpenVariants={() => setActive("variants")}
                />,
