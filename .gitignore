@@ -1,0 +1,46 @@
+# Environment and secrets
+.env
+**/.env
+!.env.example
+!**/.env.example
+
+# Python
+.venv/
+venv/
+backend/.venv/
+backend/venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.cache/
+frontend/.env.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data and generated artifacts
+/uploads/
+!backend/uploads/
+backend/uploads/*
+!backend/uploads/.gitkeep
+*.log
+*.tmp
+*.bak
+fedrepro-legacy-backup-*.zip
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
