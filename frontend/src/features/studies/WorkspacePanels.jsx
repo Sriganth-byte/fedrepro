@@ -1658,6 +1658,83 @@ function MiniEvidenceList({ title, rows }) {
   return <div className="mini-evidence-list"><h3>{title}</h3>{rows.map(([label,value])=><div key={`${title}-${label}`}><strong>{label}</strong><span>{value}</span></div>)}</div>;
 }
 
+const RISK_FAMILY_DEFINITIONS=[
+  {key:"missingness",label:"Missingness",aliases:["missing","null","nan"]},
+  {key:"duplicates",label:"Duplicates",aliases:["duplicate"]},
+  {key:"outliers",label:"Outliers",aliases:["outlier"]},
+  {key:"correlation",label:"Correlation",aliases:["corr","collinear"]},
+  {key:"leakage",label:"Leakage",aliases:["leak","target_proxy"]},
+  {key:"imbalance",label:"Imbalance",aliases:["class_imbalance","minority"]},
+  {key:"scaling",label:"Scaling",aliases:["scale","standardization"]},
+  {key:"drift",label:"Drift",aliases:["shift","distribution"]}
+];
+
+function normalizeRiskFamily(value) {
+  const text=String(value||"").toLowerCase().replaceAll("-","_").replaceAll(" ","_");
+  return RISK_FAMILY_DEFINITIONS.find((family)=>family.key===text||family.aliases.some((alias)=>text.includes(alias)))?.key||text;
+}
+
+function riskFamilyLabel(key) {
+  const definition=RISK_FAMILY_DEFINITIONS.find((family)=>family.key===key);
+  return definition?.label||String(key||"Risk").replaceAll("_"," ");
+}
+
+function isKnownRiskFamily(key) {
+  return RISK_FAMILY_DEFINITIONS.some((family)=>family.key===key);
+}
+
+function riskFamiliesForFinding(finding) {
+  const evidenceFamilies=Object.keys(finding?.evidence||{});
+  return [...new Set([finding?.code, finding?.issue, finding?.risk, ...evidenceFamilies].map(normalizeRiskFamily).filter(isKnownRiskFamily))];
+}
+
+function RiskMapDetail({ row, families, findings = [], version }) {
+  const activeFamilies=families.filter((family)=>row.familyKeys?.includes(family.key));
+  const related=findings.filter((finding)=>DiagnosisFindingColumns(finding).includes(row.column));
+  const source=row.raw?"Diagnosis contract column impact":"Diagnosis findings fallback";
+  return <div className="risk-map-detail">
+    <div className="risk-map-detail-grid">
+      <article>
+        <span>Feature</span>
+        <strong>{row.column}</strong>
+        <small>{row.role||"feature"} / {row.dataType||"type unavailable"}</small>
+      </article>
+      <article>
+        <span>Risk families</span>
+        <strong>{activeFamilies.length}</strong>
+        <small>{activeFamilies.map((family)=>family.label).join(", ")||"No active family evidence"}</small>
+      </article>
+      <article>
+        <span>Evidence source</span>
+        <strong>{source}</strong>
+        <small>{methodLabel(version)}</small>
+      </article>
+    </div>
+    <div className="risk-family-chip-grid">
+      {families.map((family)=><span key={family.key} className={row.familyKeys?.includes(family.key)?"active":""}>{family.label}</span>)}
+    </div>
+    <MiniEvidenceList title="Column evidence" rows={[
+      ["Role",row.role||"feature"],
+      ["Data type",row.dataType||"N/A"],
+      ["Risks",activeFamilies.map((family)=>family.label).join(", ")||"None"],
+      ["Recommended operations",row.recommendedOperationCount??"N/A"]
+    ]} />
+    <MiniEvidenceList title="Related findings" rows={related.length?related.map((finding)=>[finding.code,`${finding.severity} - ${finding.issue}`]):[["Status","No diagnosis finding names this feature directly"]]} />
+  </div>;
+}
+
+function findingsForRiskMapRow(row, findings = []) {
+  return findings.filter((finding)=>{
+    const columns=DiagnosisFindingColumns(finding);
+    return row.column==="Dataset-level" ? !columns.length : columns.includes(row.column);
+  });
+}
+
+function highestSeverity(findings = []) {
+  const order={critical:4,high:3,medium:2,low:1};
+  return findings.reduce((best,item)=>((order[item.severity]||0)>(order[best]||0)?item.severity:best),"");
+}
+
 function ComparisonSelector({ study, selectedVersion, versions = [], compareBase, compareId, setCompareId, options, semantic, focus, pauseAi = false }) {
   const [comparison,setComparison]=useState(null);
   const [status,setStatus]=useState("");
@@ -2179,8 +2256,8 @@ function methodLabel(version) {
 function DetailDrawer({ detail, onClose }) {
   if (!detail) return null;
   const hasRaw=detail.raw !== undefined;
-  return <section className="diagnosis-drawer-backdrop diagnosis-detail-layer" role="presentation">
-    <aside className="diagnosis-drawer diagnosis-detail-workspace" role="dialog" aria-modal="false" aria-labelledby="diagnosis-detail-title">
+  return <section className="diagnosis-drawer-backdrop diagnosis-detail-layer" role="region" aria-labelledby="diagnosis-detail-title">
+    <article className="diagnosis-drawer diagnosis-detail-workspace">
       <div className="diagnosis-drawer-head">
         <div>
           <p className="eyebrow">{detail.eyebrow || "Evidence detail"}</p>
@@ -2203,7 +2280,7 @@ function DetailDrawer({ detail, onClose }) {
         <summary>Advanced evidence</summary>
         <pre className="pre">{JSON.stringify(detail.raw, null, 2)}</pre>
       </details>}
-    </aside>
+    </article>
   </section>;
 }
 
@@ -2295,7 +2372,7 @@ function RiskMapTable({ rows = [], onOpen }) {
   return <div className="table-wrap risk-map-table"><table><thead><tr>
     {[["column","Feature"],["role","Role"],["riskCount","Risk count"],["risks","Risks"]].map(([key,label])=><th key={key} onClick={()=>sort(key)}><span>{label}{sortKey===key?` ${sortDir==="asc"?"up":"down"}`:""}</span></th>)}
   </tr></thead><tbody>{sorted.map((row,index)=><tr key={`${row.column}-${index}`} tabIndex={0} onClick={()=>onOpen(row)} onKeyDown={(event)=>event.key==="Enter"&&onOpen(row)}>
-    <td>{row.column}</td><td>{row.role}</td><td>{row.risks?.length||0}</td><td>{row.risks?.join(", ")||"None"}</td>
+    <td>{row.column}</td><td>{row.role}</td><td>{row.familyKeys?.length||row.risks?.length||0}</td><td>{(row.familyKeys||[]).map(riskFamilyLabel).join(", ")||row.risks?.join(", ")||"None"}</td>
   </tr>)}</tbody></table></div>;
 }
 
@@ -2452,6 +2529,21 @@ export function DiagnosisPanel({ study, datasets = [], version, profile, diagnos
   </div>;
   const relatedForFinding=(finding)=>interventions.find((item)=>item.source_findings?.includes(finding.code)||item.triggered_by?.includes(finding.code));
   const evidenceRows=(finding)=>Object.entries(finding?.evidence||{}).map(([key,value])=>[key.replaceAll("_"," "), typeof value==="object"?JSON.stringify(value).slice(0,160):String(value)]);
+  const detailAreaForType=(type)=>({
+    quality:"quality",
+    metric:"metric",
+    derivation:"derivation",
+    risk:"risk",
+    "risk-map":"risk-map",
+    evidence:"evidence",
+    intervention:"planner",
+    operation:"planner",
+    decision:"planner",
+    decisions:"planner",
+    ai:"ai",
+    plan:"plan"
+  })[type]||"context";
+  const setPlacedDetail=(type,next)=>setDetail({...next,area:detailAreaForType(type)});
   const openDetail=(type, payload={})=>{
     const detailBody=(rows, extra=null)=><div className="stack"><MiniEvidenceList title="Evidence" rows={rows} />{extra}</div>;
     if(type==="quality"){
@@ -2470,7 +2562,7 @@ export function DiagnosisPanel({ study, datasets = [], version, profile, diagnos
         target:detailBody([["Target",task.target_column||version.configuration?.target_column||"N/A"],["Minority class",task.minority_class||"N/A"],["Imbalance ratio",task.imbalance_ratio?metricValue(task.imbalance_ratio):"N/A"]],<ClassDistributionBars distribution={task.class_distribution} />),
         all:qualityTabs
       };
-      setDetail({eyebrow:"Dataset Quality",title:payload.title||"Quality evidence",subtitle:"Persisted profile evidence for this immutable version.",body:bodies[key]||qualityTabs,raw:profile?.report});
+      setPlacedDetail(type,{eyebrow:"Dataset Quality",title:payload.title||"Quality evidence",subtitle:"Persisted profile evidence for this immutable version.",body:bodies[key]||qualityTabs,raw:profile?.report});
       return;
     }
     if(type==="metric"){
@@ -2484,39 +2576,39 @@ export function DiagnosisPanel({ study, datasets = [], version, profile, diagnos
       };
       const [definition,direction,value,components,raw]=definitions[metric]||[];
       const componentEntries=Object.entries(components||{});
-      setDetail({eyebrow:"Diagnosis Metrics",title:metric,subtitle:definition,body:<div className="stack"><MiniEvidenceList title="Metric interpretation" rows={[["Current value",value],["Direction",direction],["Status",payload.state||"Available"],["Ruleset",diagnosis?.ruleset_version||semantic?.ruleset_version||"N/A"],["Version",`V${version.version_number}`],["Parent",version.parent_version_id?`V${version.parent_version_id}`:"Baseline / not applicable"]]} />{componentEntries.length?<div className="stack">{componentEntries.map(([key,value])=><MiniBar key={key} label={key.replaceAll("_"," ")} value={value} max={metric==="LRS"?35:25} tone={riskTone(value)} />)}</div>:<Notice>No component breakdown is stored for this metric.</Notice>}<MiniEvidenceList title="Related findings" rows={findings.filter((finding)=>metric==="LRS"?String(finding.code).includes("LEAK"):true).slice(0,6).map((finding)=>[finding.code,finding.issue])} /></div>,raw});
+      setPlacedDetail(type,{eyebrow:"Diagnosis Metrics",title:metric,subtitle:definition,body:<div className="stack"><MiniEvidenceList title="Metric interpretation" rows={[["Current value",value],["Direction",direction],["Status",payload.state||"Available"],["Ruleset",diagnosis?.ruleset_version||semantic?.ruleset_version||"N/A"],["Version",`V${version.version_number}`],["Parent",version.parent_version_id?`V${version.parent_version_id}`:"Baseline / not applicable"]]} />{componentEntries.length?<div className="stack">{componentEntries.map(([key,value])=><MiniBar key={key} label={key.replaceAll("_"," ")} value={value} max={metric==="LRS"?35:25} tone={riskTone(value)} />)}</div>:<Notice>No component breakdown is stored for this metric.</Notice>}<MiniEvidenceList title="Related findings" rows={findings.filter((finding)=>metric==="LRS"?String(finding.code).includes("LEAK"):true).slice(0,6).map((finding)=>[finding.code,finding.issue])} /></div>,raw});
       return;
     }
     if(type==="risk"||type==="derivation"){
       const finding=payload.finding;
       const related=payload.related||relatedForFinding(finding);
       const cols=DiagnosisFindingColumns(finding);
-      setDetail({eyebrow:type==="derivation"?"Evidence -> Risk -> Action":finding.code,title:finding.issue,subtitle:finding.risk,body:<div className="stack"><MiniEvidenceList title="Finding" rows={[["Severity",finding.severity],["Affected columns",cols.join(", ")||"Dataset-level"],["Recommendation",finding.recommendation],["Related metric",String(finding.code).includes("LEAK")?"LRS":"MLRS"],["Related intervention",related?.title||"N/A"]]} />{!!evidenceRows(finding).length&&<MiniEvidenceList title="Threshold evidence" rows={evidenceRows(finding)} />}</div>,raw:{finding,related}});
+      setPlacedDetail(type,{eyebrow:type==="derivation"?"Evidence -> Risk -> Action":finding.code,title:finding.issue,subtitle:finding.risk,body:<div className="stack"><MiniEvidenceList title="Finding" rows={[["Severity",finding.severity],["Affected columns",cols.join(", ")||"Dataset-level"],["Recommendation",finding.recommendation],["Related metric",String(finding.code).includes("LEAK")?"LRS":"MLRS"],["Related intervention",related?.title||"N/A"]]} />{!!evidenceRows(finding).length&&<MiniEvidenceList title="Threshold evidence" rows={evidenceRows(finding)} />}</div>,raw:{finding,related}});
       return;
     }
     if(type==="risk-map"){
       const row=payload.row;
-      setDetail({eyebrow:"Feature x Risk Map",title:row.column,subtitle:"Feature-level risk family evidence.",body:detailBody([["Role",row.role],["Risks",row.risks?.join(", ")||"None"],["Generation",methodLabel(version)]],<MiniEvidenceList title="Related findings" rows={findings.filter((finding)=>DiagnosisFindingColumns(finding).includes(row.column)).map((finding)=>[finding.code,finding.issue])} />),raw:row.raw||row});
+      setPlacedDetail(type,{eyebrow:"Feature x Risk Map",title:row.column,subtitle:"Feature-level risk family evidence derived from persisted diagnosis content.",body:<RiskMapDetail row={row} families={visibleRiskFamilies} findings={findings} version={version} />,raw:row.raw||row});
       return;
     }
     if(type==="intervention"){
       const option=payload.option;
-      setDetail({eyebrow:"Intervention Planner",title:option.title,subtitle:option.objective,body:<div className="stack"><MiniEvidenceList title="Intervention" rows={[["Status",option.status],["Severity",option.severity],["Triggered by",option.triggered_by?.join(", ")||option.source_findings?.join(", ")||"N/A"],["Affected columns",option.affected_columns?.join(", ")||"Dataset-level"],["Expected changes",option.expected_changes?.join("; ")||"N/A"],["Risks introduced",option.risks_introduced?.join("; ")||"N/A"]]} /><MiniEvidenceList title="Ordered operations" rows={(option.operations||[]).map((op,index)=>[`${index+1}. ${op.operation?.replaceAll("_"," ")}`,op.purpose||op.columns?.join(", ")||"Operation"])} /><MetricImpactPreview impact={option.metric_impact} /></div>,raw:option});
+      setPlacedDetail(type,{eyebrow:"Intervention Planner",title:option.title,subtitle:option.objective,body:<div className="stack"><MiniEvidenceList title="Intervention" rows={[["Status",option.status],["Severity",option.severity],["Triggered by",option.triggered_by?.join(", ")||option.source_findings?.join(", ")||"N/A"],["Affected columns",option.affected_columns?.join(", ")||"Dataset-level"],["Expected changes",option.expected_changes?.join("; ")||"N/A"],["Risks introduced",option.risks_introduced?.join("; ")||"N/A"]]} /><MiniEvidenceList title="Ordered operations" rows={(option.operations||[]).map((op,index)=>[`${index+1}. ${op.operation?.replaceAll("_"," ")}`,op.purpose||op.columns?.join(", ")||"Operation"])} /><MetricImpactPreview impact={option.metric_impact} /></div>,raw:option});
       return;
     }
     if(type==="operation"){
       const {option,op,index}=payload;
-      setDetail({eyebrow:"Intervention Operation",title:op.operation?.replaceAll("_"," ")||`Operation ${index+1}`,subtitle:option.title,body:detailBody([["Step",index+1],["Purpose",op.purpose||"N/A"],["Columns",op.columns?.join(", ")||option.affected_columns?.join(", ")||"Dataset-level"],["Intervention",option.title],["Triggered by",option.triggered_by?.join(", ")||option.source_findings?.join(", ")||"N/A"]]),raw:{option,operation:op}});
+      setPlacedDetail(type,{eyebrow:"Intervention Operation",title:op.operation?.replaceAll("_"," ")||`Operation ${index+1}`,subtitle:option.title,body:detailBody([["Step",index+1],["Purpose",op.purpose||"N/A"],["Columns",op.columns?.join(", ")||option.affected_columns?.join(", ")||"Dataset-level"],["Intervention",option.title],["Triggered by",option.triggered_by?.join(", ")||option.source_findings?.join(", ")||"N/A"]]),raw:{option,operation:op}});
       return;
     }
     if(type==="decision"){
       const decision=payload.decision;
-      setDetail({eyebrow:"Human Decision",title:decision.question,subtitle:decision.recommended_default,body:<div className="stack"><MiniEvidenceList title="Decision evidence" rows={[["Finding",decision.finding_code],["Scope",decision.affected_columns?.join(", ")||"Dataset-level"],["Accepting",decision.consequence_accept],["Rejecting",decision.consequence_reject]]} /><div className="row"><Button variant="secondary compact">Accept</Button><Button variant="ghost compact">Reject</Button></div></div>,raw:decision});
+      setPlacedDetail(type,{eyebrow:"Human Decision",title:decision.question,subtitle:decision.recommended_default,body:<div className="stack"><MiniEvidenceList title="Decision evidence" rows={[["Finding",decision.finding_code],["Scope",decision.affected_columns?.join(", ")||"Dataset-level"],["Accepting",decision.consequence_accept],["Rejecting",decision.consequence_reject]]} /><div className="row"><Button variant="secondary compact">Accept</Button><Button variant="ghost compact">Reject</Button></div></div>,raw:decision});
       return;
     }
     if(type==="decisions"){
       const decisions=contract?.human_decisions||[];
-      setDetail({eyebrow:"Human Decisions",title:`Human decisions required: ${decisions.length}`,subtitle:"Review choices before generating variants.",body:decisions.length?<div className="decision-drawer-list">{decisions.map((decision,index)=><button type="button" key={`${decision.finding_code}-${index}`} onClick={()=>openDetail("decision",{decision})}><strong>{decision.question}</strong><span>{decision.recommended_default}</span><small>{decision.affected_columns?.join(", ")||"Dataset-level"}</small></button>)}</div>:<Notice>No human approvals are required by the current plan.</Notice>,raw:decisions});
+      setPlacedDetail(type,{eyebrow:"Human Decisions",title:`Human decisions required: ${decisions.length}`,subtitle:"Review choices before generating variants.",body:decisions.length?<div className="decision-drawer-list">{decisions.map((decision,index)=><button type="button" key={`${decision.finding_code}-${index}`} onClick={()=>openDetail("decision",{decision})}><strong>{decision.question}</strong><span>{decision.recommended_default}</span><small>{decision.affected_columns?.join(", ")||"Dataset-level"}</small></button>)}</div>:<Notice>No human approvals are required by the current plan.</Notice>,raw:decisions});
       return;
     }
     if(type==="plan"){
@@ -2528,7 +2620,7 @@ export function DiagnosisPanel({ study, datasets = [], version, profile, diagnos
         metrics:[["Recommended metrics",contract?.experiment_handoff?.recommended_metrics?.join(", ")||"Primary metric"],["Primary metric",version.configuration?.primary_metric||"N/A"]],
         constraints:[["Human decisions remaining",contract?.human_decisions?.length||0],["Required baseline",contract?.experiment_handoff?.required_baseline||`V${version.version_number}`]]
       };
-      setDetail({eyebrow:"Variant Plan",title:payload.title||"Plan detail",subtitle:"Generator-ready selections derived from persisted intervention evidence.",body:detailBody(rows[payload.key]||rows.selected),raw:{contract,selectedOptions,selected}});
+      setPlacedDetail(type,{eyebrow:"Variant Plan",title:payload.title||"Plan detail",subtitle:"Generator-ready selections derived from persisted intervention evidence.",body:detailBody(rows[payload.key]||rows.selected),raw:{contract,selectedOptions,selected}});
       return;
     }
     if(type==="evidence"){
@@ -2540,16 +2632,42 @@ export function DiagnosisPanel({ study, datasets = [], version, profile, diagnos
         reproducibility:detailBody([["Fingerprint",shortHash(version.fingerprint?.combined_fingerprint)||"N/A"],["Configuration hash",shortHash(version.configuration?.configuration_hash)||"N/A"],["Profile report",profile?.id||version.profile_report_id||"N/A"],["Diagnosis report",diagnosis?.id||"N/A"],["Ruleset",diagnosis?.ruleset_version||"N/A"],["Profiler",profile?.profiler_version||"N/A"],["Generation method",methodLabel(version)]]),
         contract:<DiagnosisEvidenceSummary version={version} profile={profile} diagnosis={diagnosis} contract={contract} />
       };
-      setDetail({eyebrow:"Evidence Inspector",title:payload.title||"Reproducible evidence",subtitle:"Stored deterministic evidence for audit and replay.",body:bodies[payload.key]||bodies.inspector,raw:{version,profile,diagnosis,semantic,variantRecord,contract}});
+      setPlacedDetail(type,{eyebrow:"Evidence Inspector",title:payload.title||"Reproducible evidence",subtitle:"Stored deterministic evidence for audit and replay.",body:bodies[payload.key]||bodies.inspector,raw:{version,profile,diagnosis,semantic,variantRecord,contract}});
       return;
     }
     if(type==="ai"){
-      setDetail({eyebrow:"AI Explanation",title:"Persisted evidence explanation",subtitle:diagnosisReportStatus||(!diagnosis?"Run diagnosis before AI explanation.":!diagnosisReport?"No stored AI interpretation exists for this version.":"Generated from stored deterministic evidence."),body:<DiagnosisLLMReport report={diagnosisReport} status={diagnosisReportStatus||(!diagnosis?"Run diagnosis first before an evidence explanation can be generated.":!diagnosisReport?"No stored AI interpretation exists for this version.":"")} />,raw:diagnosisReport});
+      setPlacedDetail(type,{eyebrow:"AI Explanation",title:"Persisted evidence explanation",subtitle:diagnosisReportStatus||(!diagnosis?"Run diagnosis before AI explanation.":!diagnosisReport?"No stored AI interpretation exists for this version.":"Generated from stored deterministic evidence."),body:<DiagnosisLLMReport report={diagnosisReport} status={diagnosisReportStatus||(!diagnosis?"Run diagnosis first before an evidence explanation can be generated.":!diagnosisReport?"No stored AI interpretation exists for this version.":"")} />,raw:diagnosisReport});
     }
   };
-  const riskFamilies=["missing","leakage","corr","outlier","scaling","imbalance"];
-  const heatRows=(contract?.column_impact||[]).map((row)=>({column:row.column, role:row.role, risks:row.risk_families||[], raw:row}));
-  const fallbackHeatRows=[...new Set(findings.flatMap((finding)=>DiagnosisFindingColumns(finding)))].map((column)=>({column, role:"feature", risks:findings.filter((finding)=>DiagnosisFindingColumns(finding).includes(column)).map((finding)=>finding.code), raw:null}));
+  const riskRowMap=new Map();
+  (contract?.column_impact||[]).forEach((row)=>{
+    const column=row.column||"Dataset-level";
+    riskRowMap.set(column,{
+      column,
+      role:row.role||"feature",
+      dataType:row.data_type,
+      risks:row.risk_families||[],
+      familyKeys:[...new Set((row.risk_families||[]).map(normalizeRiskFamily).filter(Boolean))],
+      recommendedOperationCount:row.recommended_operation_count,
+      raw:row
+    });
+  });
+  findings.forEach((finding)=>{
+    const findingFamilies=riskFamiliesForFinding(finding);
+    const columnsForFinding=DiagnosisFindingColumns(finding);
+    (columnsForFinding.length?columnsForFinding:["Dataset-level"]).forEach((column)=>{
+      const existing=riskRowMap.get(column)||{column,role:column==="Dataset-level"?"dataset":"feature",risks:[],familyKeys:[],raw:null};
+      riskRowMap.set(column,{
+        ...existing,
+        risks:[...new Set([...(existing.risks||[]), finding.code, ...findingFamilies])],
+        familyKeys:[...new Set([...(existing.familyKeys||[]), ...findingFamilies])]
+      });
+    });
+  });
+  const heatRows=[...riskRowMap.values()].sort((a,b)=>(b.familyKeys?.length||0)-(a.familyKeys?.length||0)||String(a.column).localeCompare(String(b.column)));
+  const activeRiskKeys=[...new Set(heatRows.flatMap((row)=>row.familyKeys||[]))];
+  const visibleRiskFamilies=(activeRiskKeys.length?activeRiskKeys:RISK_FAMILY_DEFINITIONS.slice(0,6).map((family)=>family.key)).map((key)=>({key,label:riskFamilyLabel(key)}));
+  const renderDetail=(area)=><DetailDrawer detail={detail?.area===area?detail:null} onClose={()=>setDetail(null)} />;
 
   return <div className="diagnosis-console">
     <div className="diagnosis-context-bar">
@@ -2583,6 +2701,7 @@ export function DiagnosisPanel({ study, datasets = [], version, profile, diagnos
           <SmartCard icon={ScanSearch} label="Low Info" value={lowInfoColumns.length} note="constant or near-unique" tone={lowInfoColumns.length?"medium":"low"} onClick={()=>openDetail("quality",{key:"lowInfo",title:"Low-information features"})} />
           <SmartCard icon={Target} label="Target" value={task.imbalance_ratio?`${metricValue(task.imbalance_ratio)}x`:"N/A"} note={task.minority_class?`minority ${task.minority_class}`:"not computed"} onClick={()=>openDetail("quality",{key:"target",title:"Target distribution"})}><ClassDistributionBars distribution={task.class_distribution} /></SmartCard>
         </div>
+        {renderDetail("quality")}
       </section>
 
       <section className="metric-strip">
@@ -2593,6 +2712,7 @@ export function DiagnosisPanel({ study, datasets = [], version, profile, diagnos
           ["DSI",semantic?.dsi_score,"Higher means greater shift",semantic?"computed":"not applicable","neutral"],
           ["VRS",variantRecord?.vrs_score,"Higher is better",variantRecord?"variant readiness":"not applicable",variantRecord?.vrs_score>=80?"low":"neutral"]
         ].map(([label,value,meaning,state,tone])=><button type="button" key={label} className={`metric-strip-card ${tone}`} onClick={()=>openDetail("metric",{metric:label,state})}><span>{label}</span><strong>{value==null?"N/A":metricValue(value)}</strong><em>{meaning}</em><small>{state}</small></button>)}
+        {renderDetail("metric")}
       </section>
 
       <section className="console-section diagnosis-derivation">
@@ -2604,6 +2724,7 @@ export function DiagnosisPanel({ study, datasets = [], version, profile, diagnos
             return <button type="button" key={finding.code} onClick={()=>openDetail("derivation",{finding,related:option})}><span>{evidence?evidence[0].replaceAll("_"," "):"Evidence"}</span><i /> <strong>{finding.issue}</strong><i /> <em>{option?.title||"Review"}</em></button>;
           })}
         </div>
+        {renderDetail("derivation")}
       </section>
 
       <main className="diagnosis-main-grid">
@@ -2615,14 +2736,33 @@ export function DiagnosisPanel({ study, datasets = [], version, profile, diagnos
               const related=relatedForFinding(item);
               return <article key={item.code} role="button" tabIndex={0} className={`risk-console-card ${item.severity} interactive`} onClick={()=>openDetail("risk",{finding:item,related})} onKeyDown={(event)=>event.key==="Enter"&&openDetail("risk",{finding:item,related})}><div><Badge tone={item.severity}>{item.severity}</Badge><strong>{item.issue}</strong></div><p>{cols.length?`${cols.length} affected feature${cols.length===1?"":"s"}`:"Dataset-level evidence"}</p><span>{cols.slice(0,3).join(", ")||item.code}</span><footer><Button variant="secondary compact" onClick={(event)=>{event.stopPropagation();openDetail("risk",{finding:item,related});}}>Inspect</Button><Button variant="ghost compact" disabled={!related} onClick={(event)=>{event.stopPropagation();related&&setSelectedOptions((ids)=>ids.includes(related.id)?ids:[...ids,related.id]);}}>Plan Intervention</Button></footer></article>;
             })}</div>}
+            {renderDetail("risk")}
           </section>
 
           <section className="console-section">
             <div className="console-section-head"><div><p className="eyebrow">Feature x Risk Map</p><h2>Risk matrix</h2></div><div className="segmented-filter"><button type="button" className={mapMode==="visual"?"active":""} onClick={()=>setMapMode("visual")}>Visual Map</button><button type="button" className={mapMode==="table"?"active":""} onClick={()=>setMapMode("table")}>Table View</button></div></div>
-            {mapMode==="visual"?<div className="feature-risk-map">{(heatRows.length?heatRows:fallbackHeatRows).map((row)=><div role="button" tabIndex={0} className="risk-map-row" key={row.column} onClick={()=>openDetail("risk-map",{row})} onKeyDown={(event)=>event.key==="Enter"&&openDetail("risk-map",{row})}><strong>{row.column}</strong>{riskFamilies.map((risk)=>{
-              const matched=row.risks.filter((item)=>String(item).toLowerCase().includes(risk));
-              return <button type="button" key={risk} className={`risk-map-cell ${matched.length?"active":""}`} aria-label={`${row.column} ${risk} evidence`} title={risk} onClick={(event)=>{event.stopPropagation();openDetail("risk-map",{row:{...row,risks:matched.length?matched:[risk]}});}} />;
-            })}</div>)}</div>:<RiskMapTable rows={(heatRows.length?heatRows:fallbackHeatRows)} onOpen={(row)=>openDetail("risk-map",{row})} />}
+            {mapMode==="visual"?!heatRows.length?<Empty>No feature-level risk map is available.</Empty>:<div className="feature-risk-card-map">
+              {heatRows.map((row)=>{
+                const rowFindings=findingsForRiskMapRow(row,findings);
+                const activeFamilies=visibleRiskFamilies.filter((family)=>row.familyKeys?.includes(family.key));
+                return <article role="button" tabIndex={0} className="risk-map-summary-card" key={row.column} onClick={()=>openDetail("risk-map",{row})} onKeyDown={(event)=>event.key==="Enter"&&openDetail("risk-map",{row})}>
+                  <div className="risk-map-summary-head">
+                    <div><strong>{row.column}</strong><span>{row.role||"feature"} · {activeFamilies.length} risk {activeFamilies.length===1?"family":"families"} · {rowFindings.length||"no"} direct {rowFindings.length===1?"finding":"findings"}</span></div>
+                    {highestSeverity(rowFindings)&&<Badge tone={highestSeverity(rowFindings)}>{highestSeverity(rowFindings)}</Badge>}
+                  </div>
+                  <div className="risk-map-chip-list">{activeFamilies.map((family)=>{
+                  const matched=(row.risks||[]).filter((item)=>normalizeRiskFamily(item)===family.key);
+                  const familyFindings=rowFindings.filter((finding)=>riskFamiliesForFinding(finding).includes(family.key));
+                  const severity=highestSeverity(familyFindings);
+                  return <button type="button" key={family.key} className={`risk-map-chip ${severity||"neutral"}`} aria-label={`${row.column} ${family.label} evidence`} title={matched.join(", ")||familyFindings.map((finding)=>finding.code).join(", ")||`${family.label} evidence`} onClick={(event)=>{event.stopPropagation();openDetail("risk-map",{row:{...row,risks:matched.length?matched:row.risks,familyKeys:[family.key]}});}}>
+                    <strong>{family.label}</strong>
+                    <span>{familyFindings.length?`${familyFindings.length} finding${familyFindings.length===1?"":"s"}`:matched.length?`${matched.length} signal${matched.length===1?"":"s"}`:"contract signal"}</span>
+                  </button>;
+                })}</div>
+                </article>;
+              })}
+            </div>:<RiskMapTable rows={heatRows} onOpen={(row)=>openDetail("risk-map",{row})} />}
+            {renderDetail("risk-map")}
           </section>
 
           <section className="console-section">
@@ -2634,14 +2774,16 @@ export function DiagnosisPanel({ study, datasets = [], version, profile, diagnos
               <SmartCard icon={GitBranch} label="Stability" value={semantic?`SCM ${displayMetric(semantic.scm_score)}`:"N/A"} note={semantic?`DSI ${displayMetric(semantic.dsi_score)}`:"baseline or unavailable"} onClick={()=>openDetail("evidence",{key:"stability",title:"Stability evidence"})} />
               <SmartCard icon={ShieldCheck} label="Reproducibility" value={diagnosis?.ruleset_version||"N/A"} note={profile?.profiler_version||"profile N/A"} onClick={()=>openDetail("evidence",{key:"reproducibility",title:"Reproducibility evidence"})} />
             </div>
+            {renderDetail("evidence")}
           </section>
 
           <section className="console-section">
             <div className="console-section-head"><div><p className="eyebrow">Intervention Planner</p><h2>Collapsed actions</h2></div><button type="button" className="decision-pill" onClick={()=>openDetail("decisions")}>Human decisions required: {contract?.human_decisions?.length||0}</button></div>
             {!interventions.length?<Empty>No intervention options were generated from current findings.</Empty>:<div className="planner-list">{interventions.map((option)=><article key={option.id} role="button" tabIndex={0} className={`planner-item ${selectedOptions.includes(option.id)?"selected":""}`} onClick={()=>openDetail("intervention",{option})} onKeyDown={(event)=>event.key==="Enter"&&openDetail("intervention",{option})}><div className="planner-item-row"><span><input type="checkbox" checked={selectedOptions.includes(option.id)} onClick={(event)=>event.stopPropagation()} onChange={()=>toggleOption(option.id)} /><strong>{option.title}</strong></span><Badge tone={option.severity}>{option.status}</Badge></div><p>{option.triggered_by?.join(", ")||option.source_findings?.join(", ")||"Finding"} - {option.affected_columns?.length||0} columns - {option.metric_impact?.reliability_effect||"direction documented"}</p><div className="planner-operation-row">{(option.operations||[]).slice(0,3).map((op,index)=><button type="button" key={`${option.id}-${index}`} onClick={(event)=>{event.stopPropagation();openDetail("operation",{option,op,index});}}>{op.operation?.replaceAll("_"," ")}</button>)}</div></article>)}</div>}
+            {renderDetail("planner")}
           </section>
 
-          <section className="ai-compact-row"><span>AI Evidence Explanation</span><Button variant="secondary compact" onClick={()=>openDetail("ai")}>View</Button></section>
+          <section className="ai-compact-row"><span>AI Evidence Explanation</span><Button variant="secondary compact" onClick={()=>openDetail("ai")}>View</Button>{renderDetail("ai")}</section>
         </div>
 
         <aside className="variant-plan-console">
@@ -2657,11 +2799,11 @@ export function DiagnosisPanel({ study, datasets = [], version, profile, diagnos
           </div>
           <Button variant="secondary" onClick={()=>openDetail("plan",{key:"selected",title:"Review Variant Plan"})}>Review Plan</Button>
           <Button id="open-variant-generator-btn" onClick={onOpenVariants} disabled={!onOpenVariants}><Zap size={14}/>Generate Variants</Button>
+          {renderDetail("plan")}
           <details className="debug-disclosure"><summary>Advanced contract JSON</summary><pre className="pre">{JSON.stringify(contract||{},null,2)}</pre></details>
         </aside>
       </main>
     </>}
-    <DetailDrawer detail={detail} onClose={()=>setDetail(null)} />
   </div>;
 }
 

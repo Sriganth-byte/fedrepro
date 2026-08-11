@@ -529,16 +529,7 @@ class AIExplanationService:
                 rows.append(f"Columns removed: {', '.join(map(str, removed))}.")
             return "\n".join(rows)
         if kind in {"diagnosis", "diagnosis_report_interpretation"}:
-            diagnosis = evidence.get("diagnosis") or evidence
-            rows.append("Interpretation temporarily unavailable. The deterministic diagnosis remains available.")
-            if diagnosis.get("mlrs_score") is not None:
-                rows.append(f"MLRS: {diagnosis.get('mlrs_score')}.")
-            if diagnosis.get("lrs_score") is not None:
-                rows.append(f"LRS: {diagnosis.get('lrs_score')}.")
-            findings = diagnosis.get("findings") or []
-            if findings:
-                rows.append("Detected findings: " + ", ".join(str(item.get("code") or item.get("issue")) for item in findings[:6]) + ".")
-            return "\n".join(rows)
+            return AIExplanationService._deterministic_diagnosis_interpretation(evidence)
         if kind in {"dataset_executive_summary", "dataset_explanation_report", "version_analysis"}:
             selected = evidence.get("selected_version") or {}
             rows.append("Interpretation temporarily unavailable. The persisted version evidence remains available.")
@@ -546,3 +537,143 @@ class AIExplanationService:
                 rows.append(f"Selected version: V{selected.get('version_number')} with {selected.get('row_count')} rows and {selected.get('column_count')} columns.")
             return "\n".join(rows)
         return "Interpretation temporarily unavailable. The measured evidence remains available below."
+
+    @staticmethod
+    def _deterministic_diagnosis_interpretation(evidence: dict) -> str:
+        study = evidence.get("ml_study") or {}
+        selected = evidence.get("selected_version") or {}
+        profile = evidence.get("dataset_profile") or {}
+        summary = profile.get("summary") or {}
+        diagnosis = evidence.get("diagnosis") or evidence
+        contract = evidence.get("diagnosis_contract") or {}
+        readiness = contract.get("readiness") or {}
+        semantic = evidence.get("semantic_diff_from_previous")
+        findings = diagnosis.get("findings") or []
+        families = contract.get("risk_families") or []
+        interventions = contract.get("intervention_options") or []
+        decisions = contract.get("human_decisions") or []
+        score_breakdown = diagnosis.get("score_breakdown") or {}
+        mlrs_components = score_breakdown.get("mlrs_components") or {}
+        lrs_components = score_breakdown.get("lrs_components") or {}
+
+        def metric(value, default="not available"):
+            return default if value is None else str(value)
+
+        def list_text(values, default="None recorded"):
+            values = [str(item) for item in values if item not in (None, "")]
+            return ", ".join(values) if values else default
+
+        def columns_for_finding(finding):
+            evidence_json = finding.get("evidence") or {}
+            columns = []
+            for item in evidence_json.get("columns") or []:
+                columns.append(str(item.get("column") if isinstance(item, dict) else item))
+            if evidence_json.get("target_column"):
+                columns.append(str(evidence_json["target_column"]))
+            for key in ("correlations", "pairs"):
+                for item in evidence_json.get(key) or []:
+                    if isinstance(item, dict):
+                        columns.extend([str(item.get("left")), str(item.get("right"))])
+            return sorted({item for item in columns if item and item != "None"})
+
+        finding_lines = []
+        for finding in findings[:10]:
+            code = finding.get("code") or "finding"
+            issue = finding.get("issue") or "Diagnosis finding"
+            severity = finding.get("severity") or "unclassified"
+            columns = columns_for_finding(finding)
+            risk = finding.get("risk") or "No risk statement recorded."
+            recommendation = finding.get("recommendation") or "No recommendation recorded."
+            finding_lines.append(
+                f"- **{code} ({severity})**: {issue}. Scope: {list_text(columns, 'dataset-level evidence')}. Risk: {risk} Recommendation: {recommendation}"
+            )
+        if not finding_lines:
+            finding_lines.append("- No material deterministic finding crossed the configured diagnosis thresholds.")
+
+        component_lines = []
+        for title, components in (("MLRS components", mlrs_components), ("LRS components", lrs_components)):
+            active = [(key.replace("_", " "), value) for key, value in components.items() if value not in (None, 0, 0.0)]
+            if active:
+                component_lines.append(f"- **{title}**: " + "; ".join(f"{key}: {value}" for key, value in active[:8]) + ".")
+            else:
+                component_lines.append(f"- **{title}**: no component contribution was recorded above zero.")
+
+        family_lines = []
+        for family in families[:8]:
+            affected = family.get("affected_columns") or []
+            family_lines.append(
+                f"- **{family.get('family', 'risk family')} ({family.get('severity', 'unclassified')})**: {family.get('finding_count', 0)} finding(s), affected scope: {list_text(affected, 'dataset-level')}."
+            )
+        if not family_lines:
+            family_lines.append("- No grouped risk-family contract evidence was recorded.")
+
+        intervention_lines = []
+        for option in interventions[:8]:
+            ops = [str(op.get("operation", "")).replace("_", " ") for op in option.get("operations") or []]
+            intervention_lines.append(
+                f"- **{option.get('title', 'Intervention option')}**: {option.get('objective', 'No objective recorded')} Operations: {list_text(ops, 'no operations recorded')}. Expected changes: {list_text(option.get('expected_changes') or [])}."
+            )
+        if not intervention_lines:
+            intervention_lines.append("- No intervention options were generated from the current diagnosis.")
+
+        decision_lines = []
+        for decision in decisions[:8]:
+            decision_lines.append(
+                f"- **{decision.get('question', 'Decision required')}** Default: {decision.get('recommended_default', 'not recorded')}. Scope: {list_text(decision.get('affected_columns') or [], 'dataset-level')}."
+            )
+        if not decision_lines:
+            decision_lines.append("- No human approval gates are required by the current diagnosis contract.")
+
+        stability_text = (
+            f"Semantic comparison is available with SCM {metric(semantic.get('scm_score'))} and DSI {metric(semantic.get('dsi_score'))}."
+            if isinstance(semantic, dict)
+            else "No semantic comparison evidence is attached for this version, so stability against a predecessor cannot be interpreted from this report."
+        )
+
+        return "\n\n".join([
+            "# Executive Diagnosis",
+            (
+                f"This stored diagnosis report covers study **{study.get('name', 'Untitled study')}**, version "
+                f"**V{metric(selected.get('version_number'))}**, with {metric(selected.get('row_count'))} rows and "
+                f"{metric(selected.get('column_count'))} columns. The deterministic diagnosis recorded MLRS "
+                f"**{metric(diagnosis.get('mlrs_score'))}** and LRS **{metric(diagnosis.get('lrs_score'))}** under "
+                f"ruleset **{diagnosis.get('ruleset_version', 'not available')}**. Readiness status from the diagnosis contract is "
+                f"**{readiness.get('status', 'not available')}**."
+            ),
+            "# ML Training Readiness",
+            (
+                f"MLRS is the machine-learning readiness risk score, where lower is better. The current value is "
+                f"**{metric(diagnosis.get('mlrs_score'))}**. The profile summary reports {metric(summary.get('missing_cells'), '0')} missing cells, "
+                f"{metric(summary.get('duplicate_rows'), '0')} duplicate rows, and {metric(summary.get('numeric_columns'))} numeric / "
+                f"{metric(summary.get('categorical_columns'))} categorical columns. These are the main readiness signals available in stored evidence."
+            ),
+            "\n".join(component_lines),
+            "# Leakage Review",
+            (
+                f"LRS is the leakage risk score, where lower is better. The current value is **{metric(diagnosis.get('lrs_score'))}**. "
+                "Leakage interpretation is limited to findings and score components stored by the deterministic diagnosis service."
+            ),
+            "# Stability Review",
+            stability_text,
+            "# Quality Assessment",
+            "\n".join(finding_lines),
+            "# Diagnosis Statistics Interpretation",
+            "\n".join(family_lines),
+            "# Variant Generator Guidance",
+            "\n".join(intervention_lines),
+            "# Experiment Training Handoff",
+            (
+                f"Use target column **{selected.get('target_column') or 'not configured'}**, primary metric "
+                f"**{selected.get('primary_metric') or 'not configured'}**, validation strategy **{selected.get('validation_strategy') or 'not configured'}**, "
+                f"feature selection mode **{selected.get('feature_selection_mode') or 'not configured'}**, and scaling strategy "
+                f"**{selected.get('scaling_strategy') or 'not configured'}**. Treat the listed findings as constraints for experiment design before model training."
+            ),
+            "# Supported Claims",
+            (
+                "Supported by stored evidence: the selected immutable version identity, row and column counts, profile summary, "
+                "MLRS/LRS values, deterministic findings, diagnosis contract interventions, and reproducibility hashes. Not supported by this report: "
+                "actual model performance, causal explanations for data issues, or business/domain conclusions beyond the supplied study protocol."
+            ),
+            "# Required Next Actions",
+            "\n".join(decision_lines),
+        ])

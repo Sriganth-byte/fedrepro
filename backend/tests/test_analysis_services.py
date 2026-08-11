@@ -162,6 +162,48 @@ def test_ai_fallback_content_is_retryable_not_cached_as_success():
     assert not AIExplanationService.is_fallback_content("## Dataset Readiness\nThis version is ready for review.")
 
 
+def test_diagnosis_fallback_is_structured_and_cacheable():
+    evidence = {
+        "ml_study": {"name": "Placement Study"},
+        "selected_version": {
+            "version_number": 2,
+            "row_count": 100,
+            "column_count": 8,
+            "target_column": "placed",
+            "primary_metric": "F1",
+            "validation_strategy": "stratified",
+        },
+        "dataset_profile": {"summary": {"missing_cells": 4, "duplicate_rows": 1}},
+        "diagnosis": {
+            "mlrs_score": 22.9,
+            "lrs_score": 4.0,
+            "ruleset_version": "diagnosis-2.0",
+            "findings": [
+                {
+                    "code": "CLASS_IMBALANCE",
+                    "severity": "medium",
+                    "issue": "Class imbalance detected",
+                    "risk": "Minority behavior can be underrepresented.",
+                    "recommendation": "Use stratified validation.",
+                    "evidence": {"target_column": "placed"},
+                }
+            ],
+        },
+        "diagnosis_contract": {
+            "readiness": {"status": "review"},
+            "intervention_options": [],
+            "human_decisions": [],
+        },
+    }
+    fallback = AIExplanationService._fallback_interpretation("diagnosis_report_interpretation", evidence)
+    assert "# Executive Diagnosis" in fallback
+    assert "# Required Next Actions" in fallback
+    assert "CLASS_IMBALANCE" in fallback
+    assert "22.9" in fallback
+    assert not fallback.startswith("Interpretation temporarily unavailable")
+    assert not AIExplanationService.is_fallback_content(fallback)
+
+
 def test_dataset_executive_summary_prompt_uses_compact_evidence():
     evidence = {
         "ml_study": {"name": "Placement Study", "ml_task": "classification"},
