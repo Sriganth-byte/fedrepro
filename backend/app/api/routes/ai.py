@@ -9,8 +9,10 @@ from app.core.database import get_db
 from app.models.entities import ActivityLog, AIGeneratedExplanation, Dataset, DatasetConfiguration, DatasetProfileReport, DatasetVersion, DiagnosisReport, SemanticDiffReport, User
 from app.schemas.contracts import ExplanationRequest
 from app.services.ai_explanation_service import AIExplanationService
+from app.services.ai_insight_job_service import AIInsightJobService
 from app.services.dataset_workflow_service import DatasetWorkflowService
 from app.services.diagnosis_contract_service import DiagnosisContractService
+from app.services.instant_insight_service import InstantInsightService
 from app.services.study_service import StudyService
 from app.utilities.hashing import canonical_hash
 
@@ -26,6 +28,18 @@ def usable_cached_explanation(record: AIGeneratedExplanation | None) -> AIGenera
 @router.post("/studies/{study_id}/explain", status_code=201)
 def explain(study_id: int, payload: ExplanationRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     study = StudyService(db).get_owned(study_id, user.id)
+    if payload.explanation_type == "version_analysis":
+        result = AIInsightJobService(db).enqueue_version_analysis(study.id, payload.source_entity_id, priority=1)
+        record = result.get("record") or AIInsightJobService(db).record_payload(AIInsightJobService(db).cached_version_analysis(study.id, payload.source_entity_id))
+        return {
+            "type": "version_analysis",
+            "version_id": payload.source_entity_id,
+            "cached": bool(result.get("cached")),
+            "job": result.get("job"),
+            "status": result.get("status"),
+            "instant_insight": InstantInsightService(db).latest_payload(payload.source_entity_id),
+            **(record or {}),
+        }
     evidence = resolve_evidence(db, study, payload.explanation_type, payload.source_entity_id)
     record = AIExplanationService(db).explain(study, payload.explanation_type, payload.source_entity_id, evidence)
     response = {"id": record.id, "type": record.explanation_type, "model": record.model, "prompt_version": record.prompt_version, "source_evidence_hash": record.source_evidence_hash, "content": record.content, "created_at": record.created_at}
@@ -40,6 +54,9 @@ def explain(study_id: int, payload: ExplanationRequest, db: Session = Depends(ge
 @router.post("/studies/{study_id}/semantic-diffs/{diff_id}/metrics-interpretation", status_code=201)
 def semantic_metrics_interpretation(study_id: int, diff_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     study = StudyService(db).get_owned(study_id, user.id)
+    semantic = db.get(SemanticDiffReport, diff_id)
+    if semantic:
+        return _version_analysis_field_or_enqueue(db, study, semantic.current_version_id, "semantic_change_interpretation", "semantic_metrics")
     evidence = resolve_evidence(db, study, "semantic_metrics", diff_id)
     evidence_hash = canonical_hash(evidence)
     cached = db.query(AIGeneratedExplanation).filter(
@@ -57,6 +74,9 @@ def semantic_metrics_interpretation(study_id: int, diff_id: int, db: Session = D
 @router.post("/studies/{study_id}/semantic-diffs/{diff_id}/interpretation", status_code=201)
 def semantic_diff_interpretation(study_id: int, diff_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     study = StudyService(db).get_owned(study_id, user.id)
+    semantic = db.get(SemanticDiffReport, diff_id)
+    if semantic:
+        return _version_analysis_field_or_enqueue(db, study, semantic.current_version_id, "semantic_change_interpretation", "semantic_diff_interpretation")
     evidence = resolve_evidence(db, study, "semantic_diff_interpretation", diff_id)
     evidence_hash = canonical_hash(evidence)
     cached = db.query(AIGeneratedExplanation).filter(
@@ -74,27 +94,17 @@ def semantic_diff_interpretation(study_id: int, diff_id: int, db: Session = Depe
 @router.post("/studies/{study_id}/versions/{version_id}/executive-summary", status_code=201)
 def version_executive_summary(study_id: int, version_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     study = StudyService(db).get_owned(study_id, user.id)
-    evidence = resolve_evidence(db, study, "dataset_executive_summary", version_id)
-    evidence_hash = canonical_hash(evidence)
-    cached = db.query(AIGeneratedExplanation).filter(
-        AIGeneratedExplanation.study_id == study.id,
-        AIGeneratedExplanation.explanation_type == "dataset_executive_summary",
-        AIGeneratedExplanation.source_entity_id == version_id,
-        AIGeneratedExplanation.source_evidence_hash == evidence_hash,
-        AIGeneratedExplanation.prompt_version == AIExplanationService.prompt_version,
-    ).order_by(AIGeneratedExplanation.created_at.desc()).first()
-    cached = usable_cached_explanation(cached)
-    record = cached or AIExplanationService(db).explain(study, "dataset_executive_summary", version_id, evidence)
-    return {"id": record.id, "type": record.explanation_type, "version_id": version_id, "model": record.model, "prompt_version": record.prompt_version, "source_evidence_hash": record.source_evidence_hash, "content": record.content, "created_at": record.created_at, "cached": bool(cached)}
+    return _version_analysis_field_or_enqueue(db, study, version_id, "executive_summary", "dataset_executive_summary")
 
 
 @router.post("/studies/{study_id}/versions/{version_id}/executive-summary/stream")
 def version_executive_summary_stream(study_id: int, version_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     study = StudyService(db).get_owned(study_id, user.id)
-    evidence = resolve_evidence(db, study, "dataset_executive_summary", version_id)
-    stream = AIExplanationService(db).explain_stream(study, "dataset_executive_summary", version_id, evidence)
+    response = _version_analysis_field_or_enqueue(db, study, version_id, "executive_summary", "dataset_executive_summary")
+    def stream():
+        yield response.get("content") or "Enhanced interpretation is not available yet. Deterministic insight remains available."
     return StreamingResponse(
-        stream,
+        stream(),
         media_type="text/markdown; charset=utf-8",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -103,19 +113,51 @@ def version_executive_summary_stream(study_id: int, version_id: int, db: Session
 @router.post("/studies/{study_id}/versions/{version_id}/diagnosis-interpretation", status_code=201)
 def version_diagnosis_interpretation(study_id: int, version_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     study = StudyService(db).get_owned(study_id, user.id)
-    evidence = resolve_evidence(db, study, "diagnosis_report_interpretation", version_id)
-    diagnosis_id = evidence["diagnosis"]["id"]
-    evidence_hash = canonical_hash(evidence)
-    cached = db.query(AIGeneratedExplanation).filter(
-        AIGeneratedExplanation.study_id == study.id,
-        AIGeneratedExplanation.explanation_type == "diagnosis_report_interpretation",
-        AIGeneratedExplanation.source_entity_id == diagnosis_id,
-        AIGeneratedExplanation.source_evidence_hash == evidence_hash,
-        AIGeneratedExplanation.prompt_version == AIExplanationService.prompt_version,
-    ).order_by(AIGeneratedExplanation.created_at.desc()).first()
-    cached = usable_cached_explanation(cached)
-    record = cached or AIExplanationService(db).explain(study, "diagnosis_report_interpretation", diagnosis_id, evidence)
-    return {"id": record.id, "type": record.explanation_type, "version_id": version_id, "model": record.model, "prompt_version": record.prompt_version, "source_evidence_hash": record.source_evidence_hash, "content": record.content, "created_at": record.created_at, "cached": bool(cached)}
+    return _version_analysis_field_or_enqueue(db, study, version_id, "diagnosis_interpretation", "diagnosis_report_interpretation")
+
+
+def _version_analysis_field_or_enqueue(db: Session, study, version_id: int, field: str, response_type: str) -> dict:
+    service = AIInsightJobService(db)
+    cached = service.cached_version_analysis(study.id, version_id)
+    structured = None
+    if cached:
+        try:
+            structured = json.loads(cached.content)
+        except json.JSONDecodeError:
+            structured = None
+    if structured and structured.get(field):
+        return {
+            "id": cached.id,
+            "type": response_type,
+            "version_id": version_id,
+            "model": cached.model,
+            "prompt_version": cached.prompt_version,
+            "source_evidence_hash": cached.source_evidence_hash,
+            "content": _field_to_text(structured[field]),
+            "created_at": cached.created_at,
+            "cached": True,
+            "structured_content": structured,
+        }
+    enqueue = service.enqueue_version_analysis(study.id, version_id, priority=1)
+    instant = InstantInsightService(db).latest_payload(version_id) or {}
+    fallback = instant.get(field) or instant.get("summary") or "Generating enhanced interpretation..."
+    return {
+        "type": response_type,
+        "version_id": version_id,
+        "content": _field_to_text(fallback),
+        "cached": False,
+        "job": enqueue.get("job"),
+        "status": enqueue.get("status"),
+        "instant_insight": instant,
+    }
+
+
+def _field_to_text(value) -> str:
+    if isinstance(value, list):
+        return "\n".join(f"- {item}" for item in value)
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value or "")
 
 
 def resolve_evidence(db: Session, study, kind: str, entity_id: int) -> dict:

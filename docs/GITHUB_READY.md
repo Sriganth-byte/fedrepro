@@ -1,6 +1,6 @@
 # GitHub Ready Checklist
 
-**Last updated:** 2026-08-11
+**Last updated:** 2026-08-16
 
 Use this before committing and pushing the current FedRepro system.
 
@@ -39,7 +39,7 @@ These are ignored and should stay local:
 
 ```powershell
 cd backend
-.\.venv\Scripts\python.exe -m pytest -q
+.\venv\Scripts\python.exe -m pytest -q
 
 cd ..\frontend
 npm run build
@@ -47,7 +47,7 @@ npm run build
 
 Current expected result:
 
-- backend: 59 passed
+- backend: 61 passed
 - frontend: build passes with one webpack entrypoint size warning
 
 ## First Push

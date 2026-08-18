@@ -237,6 +237,30 @@ class AIGeneratedExplanation(TimestampMixin, Base):
     content: Mapped[str] = mapped_column(Text)
 
 
+class AIInsightJob(Base):
+    __tablename__ = "ai_insight_jobs"
+    __table_args__ = (
+        CheckConstraint("status IN ('queued','running','completed','failed')", name="ck_ai_insight_jobs_status"),
+        CheckConstraint("task_type IN ('version_analysis')", name="ck_ai_insight_jobs_task_type"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    version_id: Mapped[int] = mapped_column(ForeignKey("dataset_versions.id", ondelete="CASCADE"), index=True)
+    study_id: Mapped[int] = mapped_column(ForeignKey("studies.id", ondelete="CASCADE"), index=True)
+    task_type: Mapped[str] = mapped_column(String(80), index=True)
+    priority: Mapped[int] = mapped_column(Integer, default=5, index=True)
+    evidence_hash: Mapped[str] = mapped_column(String(64), index=True)
+    context_hash: Mapped[str] = mapped_column(String(64), index=True)
+    prompt_version: Mapped[str] = mapped_column(String(32), index=True)
+    model_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    queued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    execution_time_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class ActivityLog(Base):
     __tablename__ = "activity_logs"
     id: Mapped[int] = mapped_column(primary_key=True)

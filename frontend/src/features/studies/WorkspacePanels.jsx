@@ -264,7 +264,6 @@ export function EnhancedOverviewPanel({ study, datasets, configuration: configur
   const runAi=async(type)=>{
     const payload=type==="diagnosis"&&diagnosis?.id?{explanation_type:"diagnosis",source_entity_id:diagnosis.id}:type==="semantic"&&latest?.semantic_diff?.id?{explanation_type:"semantic_diff",source_entity_id:latest.semantic_diff.id}:{explanation_type:"study_description",source_entity_id:study.id};
     setAiStatus("Generating evidence-bound research brief...");
-    setAiResult(null);
     try{setAiResult(await aiApi.explain(study.id,payload));setAiStatus("");}
     catch(err){setAiStatus(aiFallbackMessage());}
   };
@@ -984,7 +983,7 @@ function formatBytes(bytes) {
   return `${(bytes/(1024*1024)).toFixed(1)} MB`;
 }
 
-export function VersionPanel({ study, datasets, selectedVersion, profile, semanticHistory, onVersion, onDelete, onOpenDiagnosis, status }) {
+export function VersionPanel({ study, datasets, selectedVersion, profile, semanticHistory, instantInsight, aiAnalysis, aiJob, onVersion, onDelete, onOpenDiagnosis, status }) {
   const [detailTab,setDetailTab]=useState("fingerprint");
   const [compareId,setCompareId]=useState("");
   const [metricAiResult,setMetricAiResult]=useState(null);
@@ -1132,7 +1131,7 @@ export function VersionPanel({ study, datasets, selectedVersion, profile, semant
       <LineageTimeline versions={versions} selectedVersion={selectedWithEvidence} parentLabel={parentVersionLabel} onSelect={(row)=>loadVersion(row,"lineage")} />
       <ComparisonSelector study={study} selectedVersion={selectedWithEvidence} versions={versions} compareBase={compareBase} compareId={compareId} setCompareId={setCompareId} options={compareOptions} semantic={semantic} pauseAi={executiveStreaming} />
       <VersionExportActions study={study} version={selectedWithEvidence} semantic={semantic} onExportBundle={exportBundle} onLoadReport={loadEvidenceReport} onExecutiveSummary={generateExecutiveSummary} reportStatus={reportStatus||executiveStatus} />
-      {detailTab==="analysis"&&profile&&<VersionAnalysis key={selectedWithEvidence.id} study={study} version={selectedWithEvidence} profile={profile} timeline={semanticHistory} />}
+      {detailTab==="analysis"&&profile&&<VersionAnalysis key={selectedWithEvidence.id} study={study} version={selectedWithEvidence} profile={profile} timeline={semanticHistory} instantInsight={instantInsight} aiAnalysis={aiAnalysis} aiJob={aiJob} onRefresh={()=>onVersion(selectedWithEvidence.id)} />}
     </>}
   </div>;
 }
@@ -1940,21 +1939,26 @@ function LegacyVersionPanel({ study, datasets, selectedVersion, profile, semanti
   return <div className="stack"><Card><h2>Versioning and fingerprints</h2><p className="muted">View a saved analysis or permanently remove a version and its generated evidence.</p>{status&&<Notice error={status.includes("Could not")}>{status}</Notice>}{!versions.length?<Empty>Versions appear after a registration is configured.</Empty>:<DataTable rows={versions} columns={[{key:"dataset_name",label:"Dataset"},{key:"version_number",label:"Version",render:(r)=>`V${r.version_number}`},{key:"row_count",label:"Rows"},{key:"column_count",label:"Columns"},{key:"file_hash",label:"File hash",render:(r)=><span className="mono">{r.file_hash.slice(0,16)}…</span>},{key:"fingerprint",label:"Fingerprint",render:(r)=><span className="mono">{r.fingerprint?.slice(0,16)}…</span>},{key:"action",label:"Actions",render:(r)=><div className="row" style={{justifyContent:"flex-start"}}><Button variant="secondary compact" onClick={()=>onVersion(r.id)}>View analysis</Button><Button variant="danger compact" aria-label={`Delete ${r.dataset_name} version ${r.version_number}`} onClick={()=>remove(r)}><Trash2 size={14} />Delete</Button></div>}]} />}</Card>{selectedVersion&&profile&&<VersionAnalysis key={selectedVersion.id} study={study} version={selectedVersion} profile={profile} timeline={semanticHistory} />}</div>;
 }
 
-function VersionAnalysis({ study, version, profile, timeline }) {
+function VersionAnalysis({ study, version, profile, timeline, instantInsight, aiAnalysis, aiJob, onRefresh }) {
   const report=profile.report;
-  const [aiResult,setAiResult]=useState(null);
+  const [aiResult,setAiResult]=useState(aiAnalysis);
   const [aiStatus,setAiStatus]=useState("");
+  useEffect(()=>{setAiResult(aiAnalysis);setAiStatus("");},[aiAnalysis?.id,version.id]);
   const generateInsights=async()=>{
     setAiStatus("Generating evidence-bound insights with Ollama…");
     setAiResult(null);
     try{
-      setAiResult(await aiApi.explain(study.id,{explanation_type:"version_analysis",source_entity_id:version.id}));
-      setAiStatus("");
+      const result=await aiApi.explain(study.id,{explanation_type:"version_analysis",source_entity_id:version.id});
+      setAiResult(result?.structured_content?result:null);
+      setAiStatus(result?.cached?"":"Generating enhanced interpretation...");
+      if(onRefresh)setTimeout(onRefresh,900);
     }catch(err){
       setAiStatus(aiFallbackMessage());
     }
   };
   const aiLoading=aiStatus.startsWith("Generating");
+  const jobPending=["queued","running"].includes(aiJob?.status)||["queued","running"].includes(aiResult?.status);
+  const jobFailed=aiJob?.status==="failed"||aiResult?.status==="failed";
   return <div className="stack">
     <Card>
       <p className="eyebrow">Selected version analysis</p>
@@ -1988,13 +1992,24 @@ function VersionAnalysis({ study, version, profile, timeline }) {
       </div>
     </Card>
     <Card className="ai-panel">
-      <p className="eyebrow">Optional LLM interpretation</p>
+      <p className="eyebrow">Instant and enhanced insight</p>
       <h2>Human-understandable insights</h2>
-      <p className="muted">Ollama receives the ML study, selected profile, version history, and semantic diffs. It explains persisted evidence only and cannot alter calculated results.</p>
-      <Button onClick={generateInsights} disabled={aiLoading}>{aiLoading?"Generating insights…":"Generate AI insights"}</Button>
-      {aiStatus&&<Notice error={!aiLoading}>{aiStatus}</Notice>}
-      {aiResult&&<AIInsightReport result={aiResult} />}
+      <p className="muted">Diagnosis loads from persisted deterministic evidence first. Ollama receives only compact evidence and runs in the background.</p>
+      {instantInsight&&<InstantInsightCard insight={instantInsight} />}
+      {aiResult?.structured_content?<AIInsightReport result={aiResult} />:jobPending||aiLoading?<Notice>Generating enhanced interpretation...</Notice>:jobFailed?<Notice error>{aiJob?.error_message||"Enhanced interpretation failed."}</Notice>:<Notice>Enhanced interpretation is not cached yet. Deterministic insight is available above.</Notice>}
+      <Button onClick={generateInsights} disabled={aiLoading}>{jobFailed?"Retry AI":"Refresh AI insight"}</Button>
     </Card>
+    {aiStatus&&<Notice error={!aiLoading}>{aiStatus}</Notice>}
+  </div>;
+}
+
+function InstantInsightCard({ insight }) {
+  return <div className="context-list">
+    <div className="context-row"><strong>Summary</strong><span>{insight.summary}</span></div>
+    <div className="context-row"><strong>Quality</strong><span>{insight.quality_interpretation}</span></div>
+    <div className="context-row"><strong>Diagnosis</strong><span>{insight.diagnosis_interpretation}</span></div>
+    <div className="context-row"><strong>Stability</strong><span>{insight.semantic_change_interpretation}</span></div>
+    <div className="context-row"><strong>Next</strong><span>{(insight.recommended_actions||[]).join(" ")}</span></div>
   </div>;
 }
 
@@ -2386,7 +2401,7 @@ function diagnosisVersionInfo(item, activeVersionId = null, transientStatus = nu
   };
 }
 
-export function DiagnosisPanel({ study, datasets = [], version, profile, diagnosis, initialContract = null, versionStatus = "", onVersion, onOpenVariants }) {
+export function DiagnosisPanel({ study, datasets = [], version, profile, diagnosis, initialContract = null, instantInsight, aiAnalysis, aiJob, versionStatus = "", onVersion, onOpenVariants }) {
   const [contract,setContract]=useState(initialContract);
   const [status,setStatus]=useState("");
   const [diagnosisReport,setDiagnosisReport]=useState(null);
@@ -2421,6 +2436,16 @@ export function DiagnosisPanel({ study, datasets = [], version, profile, diagnos
     let active=true;
     const load=async()=>{
       if(!version?.id||!diagnosis?.id){setDiagnosisReport(null);setDiagnosisReportStatus("");return;}
+      if(aiAnalysis?.structured_content?.diagnosis_interpretation){
+        setDiagnosisReport({content:aiAnalysis.structured_content.diagnosis_interpretation,prompt_version:aiAnalysis.prompt_version,job:aiJob});
+        setDiagnosisReportStatus("");
+        return;
+      }
+      if(instantInsight?.diagnosis_interpretation){
+        setDiagnosisReport({content:instantInsight.diagnosis_interpretation,prompt_version:instantInsight.insight_version,job:aiJob});
+        setDiagnosisReportStatus(aiJob?.status==="failed"?"Enhanced interpretation failed. Showing deterministic insight.":aiJob?.status==="queued"||aiJob?.status==="running"?"Generating enhanced interpretation...":"");
+        return;
+      }
       setDiagnosisReportStatus("Preparing stored diagnosis interpretation...");
       try{
         const result=await aiApi.diagnosisInterpretation(study.id,version.id);
@@ -2431,7 +2456,7 @@ export function DiagnosisPanel({ study, datasets = [], version, profile, diagnos
     };
     load();
     return()=>{active=false;};
-  },[study.id,version?.id,diagnosis?.id]);
+  },[study.id,version?.id,diagnosis?.id,aiAnalysis?.id,instantInsight?.evidence_hash,aiJob?.status]);
   useEffect(()=>{
     if(version?.dataset_id){
       setSelectedDatasetId(String(version.dataset_id));

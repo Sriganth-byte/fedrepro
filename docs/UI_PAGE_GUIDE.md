@@ -1,6 +1,6 @@
 # FedRepro UI Page Guide
 
-**Last updated:** 2026-08-11
+**Last updated:** 2026-08-16
 
 This guide explains how to use each page in the current FedRepro UI.
 

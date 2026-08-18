@@ -9,8 +9,10 @@ from sqlalchemy.orm import Session
 from app.models.entities import ActivityLog, Dataset, DatasetConfiguration, DatasetFingerprint, DatasetProfileReport, DatasetRegistration, DatasetVersion, DiagnosisReport, LineageEvent, SemanticDiffReport, Study
 from app.schemas.contracts import ConfigurationCreate
 from app.services.dataset_explanation_report_service import DatasetExplanationReportService
+from app.services.ai_insight_job_service import AIInsightJobService
 from app.services.diagnosis_service import DiagnosisService
 from app.services.fingerprint_service import FingerprintService
+from app.services.instant_insight_service import InstantInsightService
 from app.services.profiling_service import ProfilingService
 from app.services.semantic_diff_service import SemanticDiffService
 from app.storage.local_storage import LocalFileStorage
@@ -97,6 +99,7 @@ class DatasetWorkflowService:
             self.db.add(ActivityLog(study_id=study.id, actor_id=user_id, action="dataset.version_report", entity_type="dataset_version", entity_id=version.id, details_json=DatasetExplanationReportService.version_report(study, self.db.get(Dataset, version.dataset_id), registration, version, configuration, fingerprint, profile, diagnosis_record, semantic_record)))
             self.db.commit()
             self.db.refresh(version)
+            self._persist_instant_and_enqueue(study, version)
             return version
         except Exception:
             self.db.rollback()
@@ -165,6 +168,7 @@ class DatasetWorkflowService:
         diagnosis = self.db.query(DiagnosisReport).filter(DiagnosisReport.version_id == version.id).first()
         if profile and diagnosis and not recompute:
             self.db.commit()
+            self._persist_instant_and_enqueue(study, version)
             if generate_ai:
                 self._generate_ai_interpretations(study, version, diagnosis)
             return version
@@ -233,6 +237,7 @@ class DatasetWorkflowService:
         self.db.add(ActivityLog(study_id=study.id, actor_id=user_id, action="diagnosis.score_breakdown", entity_type="diagnosis_report", entity_id=diagnosis.id, details_json=diagnosis_payload["score_breakdown"]))
         self.db.commit()
         self.db.refresh(version)
+        self._persist_instant_and_enqueue(study, version)
         if generate_ai:
             self._generate_ai_interpretations(study, version, diagnosis)
         return version
@@ -285,18 +290,21 @@ class DatasetWorkflowService:
 
     def _generate_ai_interpretations(self, study: Study, version: DatasetVersion, diagnosis: DiagnosisReport) -> None:
         try:
-            from app.api.routes.ai import resolve_evidence
-            from app.services.ai_explanation_service import AIExplanationService
-
-            service = AIExplanationService(self.db)
-            diagnosis_evidence = resolve_evidence(self.db, study, "diagnosis_report_interpretation", version.id)
-            service.explain(study, "diagnosis_report_interpretation", diagnosis.id, diagnosis_evidence)
-            executive_evidence = resolve_evidence(self.db, study, "dataset_executive_summary", version.id)
-            service.explain(study, "dataset_executive_summary", version.id, executive_evidence)
-            report_evidence = resolve_evidence(self.db, study, "dataset_explanation_report", version.id)
-            service.explain(study, "dataset_explanation_report", version.id, report_evidence)
+            AIInsightJobService(self.db).enqueue_version_analysis(study.id, version.id, priority=3)
         except Exception as exc:
             logger.info("Skipping automatic AI interpretation for version %s: %s", version.id, exc)
+
+    def _persist_instant_and_enqueue(self, study: Study, version: DatasetVersion) -> None:
+        try:
+            InstantInsightService(self.db).ensure_for_version(study, version)
+            self.db.commit()
+        except Exception as exc:
+            self.db.rollback()
+            logger.info("Skipping instant insight for version %s: %s", version.id, exc)
+        try:
+            AIInsightJobService(self.db).enqueue_version_analysis(study.id, version.id, priority=3)
+        except Exception as exc:
+            logger.info("Skipping AI insight enqueue for version %s: %s", version.id, exc)
 
     def refresh_semantic_report(self, report: SemanticDiffReport) -> bool:
         # Metric reports are historical evidence; new algorithms apply to new comparisons only.

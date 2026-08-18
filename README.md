@@ -17,6 +17,7 @@ AI support is optional and explanation-only. AI does not calculate fingerprints,
 - Startup evidence warmup for all dataset versions
 - Variant Generator with deterministic pipeline planning, VRS ranking, and version promotion
 - Optional Ollama summaries, diagnosis interpretations, semantic interpretations, and dataset explanation reports
+- Cache-first instant insight plus background `version_analysis` AI jobs for fast diagnosis loading
 - DOCX diagnosis and executive reports
 - Full light/dark React UI
 
@@ -27,11 +28,12 @@ AI support is optional and explanation-only. AI does not calculate fingerprints,
 | `docs/ARCHITECTURE.md` | Current backend/frontend architecture, evidence lifecycle, metrics, routes, startup warmup |
 | `docs/UI_REFERENCE.md` | UI implementation reference for components, state, diagnosis dashboard, and styling |
 | `docs/UI_PAGE_GUIDE.md` | User-facing guide for every page and main workflow |
+| `docs/FEATURE_MAPPING.md` | Feature-to-code map for routes, pages, services, docs, and verification coverage |
 | `docs/AGENT_KNOWLEDGE_BASE.md` | Fast-load engineering reference for future coding agents |
 | `docs/VARIANT_GENERATOR_REPORT.md` | Detailed Variant Generator implementation report |
 | `docs/REFINEMENT_1_IMPLEMENTATION_REPORT.md` | Study configuration completeness and lineage report |
-| `TECHNICAL_IMPLEMENTATION_REPORT.md` | Detailed implementation assessment and current addendum |
-| `GITHUB_READY.md` | Commit/push and verification checklist |
+| `docs/TECHNICAL_IMPLEMENTATION_REPORT.md` | Detailed implementation assessment and current addendum |
+| `docs/GITHUB_READY.md` | Commit/push and verification checklist |
 
 ## Project Structure
 
@@ -59,7 +61,7 @@ frontend/
   package.json
 
 docs/                 architecture, UI, implementation, and user guides
-tools/                local utility scripts
+tools/                maintained operational utilities
 ```
 
 ## Prerequisites
@@ -76,8 +78,8 @@ From the project root:
 
 ```powershell
 cd backend
-python -m venv .venv
-.\.venv\Scripts\pip.exe install -r requirements.txt
+python -m venv venv
+.\venv\Scripts\pip.exe install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
@@ -97,13 +99,13 @@ EVIDENCE_WARMUP_ON_STARTUP=true
 Run migrations:
 
 ```powershell
-.\.venv\Scripts\alembic.exe upgrade head
+.\venv\Scripts\alembic.exe upgrade head
 ```
 
 Start the backend:
 
 ```powershell
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+.\venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 Useful URLs:
@@ -189,7 +191,7 @@ Backend:
 
 ```powershell
 cd backend
-..\backend\venv\Scripts\python.exe -m pytest
+.\venv\Scripts\python.exe -m pytest
 ```
 
 Frontend:
@@ -201,7 +203,7 @@ npm.cmd run build
 
 Latest local verification:
 
-- Backend: 59 passed
+- Backend: 61 passed
 - Frontend: build passed with a webpack entrypoint size warning
 
 ## Boundaries

@@ -21,7 +21,9 @@ from app.services.diagnosis_service import DiagnosisService
 from app.services.profiling_service import ProfilingService
 from app.services.semantic_diff_service import SemanticDiffService
 from app.api.routes.ai import resolve_evidence
+from app.services.ai_insight_job_service import AIInsightJobService
 from app.services.ai_explanation_service import AIExplanationService
+from app.services.instant_insight_service import InstantInsightService
 from app.services.study_service import StudyService
 from app.utilities.hashing import canonical_hash
 
@@ -162,10 +164,6 @@ def version_analysis(version_id: int, db: Session = Depends(get_db), user: User 
     diff_rows = db.query(SemanticDiffReport).filter(
         SemanticDiffReport.current_version_id.in_(version_ids)
     ).all()
-    workflow = DatasetWorkflowService(db)
-    refreshed = [workflow.refresh_semantic_report(item) for item in diff_rows]
-    if any(refreshed):
-        db.commit()
     diffs = {item.current_version_id: semantic_payload(item) for item in diff_rows}
     profile_row = db.query(DatasetProfileReport).filter(
         DatasetProfileReport.version_id == selected.id
@@ -173,6 +171,9 @@ def version_analysis(version_id: int, db: Session = Depends(get_db), user: User 
     diagnosis_row = db.query(DiagnosisReport).filter(
         DiagnosisReport.version_id == selected.id
     ).first()
+    job_service = AIInsightJobService(db)
+    dataset = db.get(Dataset, selected.dataset_id)
+    cached_ai = job_service.cached_version_analysis(dataset.study_id, selected.id)
     return {
         "version": version_bundle(db, selected),
         "profile": None if not profile_row else {
@@ -200,6 +201,9 @@ def version_analysis(version_id: int, db: Session = Depends(get_db), user: User 
             "created_at": item.created_at,
             "semantic_diff": diffs.get(item.id),
         } for item in versions],
+        "instant_insight": InstantInsightService(db).latest_payload(selected.id),
+        "ai_analysis": job_service.record_payload(cached_ai),
+        "ai_job": job_service.status_for_version(selected.id),
     }
 
 

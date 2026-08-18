@@ -170,22 +170,20 @@ class AIExplanationService:
             "keep_alive": "10m",
             "options": {
                 "temperature": 0.25 if narrative_interpretation else 0.1,
-                "num_predict": 4096 if version_analysis else 1200 if executive_summary else 500,
+                "num_predict": self.settings.ai_version_analysis_max_tokens if version_analysis else self.settings.ai_report_max_tokens if executive_summary or explanation_type == "dataset_explanation_report" else 500,
                 **({"num_ctx": 16384} if version_analysis else {}),
             },
         }
 
-    @staticmethod
-    def _timeout(explanation_type: str) -> httpx.Timeout:
+    def _timeout(self, explanation_type: str) -> httpx.Timeout:
         if explanation_type == "version_analysis":
-            return httpx.Timeout(600, connect=10)
+            return httpx.Timeout(self.settings.ai_job_timeout_seconds, connect=10)
         if explanation_type == "dataset_executive_summary":
             return httpx.Timeout(180, connect=10, read=180)
         return httpx.Timeout(90, connect=10)
 
-    @staticmethod
-    def _max_attempts(explanation_type: str) -> int:
-        return 2 if explanation_type == "version_analysis" else 1 if explanation_type == "dataset_executive_summary" else 2
+    def _max_attempts(self, explanation_type: str) -> int:
+        return self.settings.ai_job_max_attempts if explanation_type == "version_analysis" else 1 if explanation_type == "dataset_executive_summary" else 2
 
     @staticmethod
     def _prompt(kind: str, evidence: dict) -> str:

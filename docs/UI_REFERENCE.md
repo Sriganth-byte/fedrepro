@@ -1,6 +1,6 @@
 # FedRepro UI Reference
 
-**Last updated:** 2026-08-11
+**Last updated:** 2026-08-16
 **Stack:** React 18, React Router, Axios, Recharts, lucide-react, Webpack
 **Design:** token-based CSS with full light/dark support
 

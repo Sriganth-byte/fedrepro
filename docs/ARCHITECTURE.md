@@ -1,6 +1,6 @@
 # FedRepro System Architecture
 
-**Last updated:** 2026-08-11
+**Last updated:** 2026-08-16
 **Migration head:** `0006_variant_generator`
 **Current status:** production-ready research workflow with deterministic evidence warmup
 
@@ -24,6 +24,8 @@ AI must not compute or modify:
 - intervention eligibility
 
 AI explanations are generated only from persisted evidence and are cached with the evidence hash, prompt version, model name, source type, and source identifier.
+
+Fast diagnosis loading uses a deterministic instant insight first. Enhanced Ollama analysis is represented by `ai_insight_jobs`, runs as background `version_analysis`, and reuses cached `AIGeneratedExplanation` rows until the compact evidence hash or prompt version changes.
 
 ## Runtime Stack
 
@@ -166,16 +168,43 @@ The Diagnosis page displays VRS alongside MLRS/LRS/SCM/DSI when the selected ver
 
 ## Main API Routes
 
+### Auth
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/auth/register` | Register a researcher account |
+| POST | `/api/auth/login` | Issue access token |
+
+### Studies and Reporting
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/dashboard` | Dashboard summary and recent activity |
+| POST | `/api/studies` | Create study |
+| GET | `/api/studies` | List studies; supports search and ML task filter |
+| GET | `/api/studies/{study_id}` | Study detail |
+| PATCH | `/api/studies/{study_id}` | Legacy study update path |
+| GET | `/api/studies/{study_id}/configuration` | Current study protocol |
+| GET | `/api/studies/{study_id}/configurations` | Protocol version history |
+| POST | `/api/studies/{study_id}/configurations` | Create protocol version |
+| GET | `/api/studies/{study_id}/configurations/diff` | Field-level protocol diff |
+| GET | `/api/studies/{study_id}/configurations/{version_number}` | Protocol by version number |
+| GET | `/api/studies/{study_id}/findings` | Study findings summary |
+| GET | `/api/studies/{study_id}/executive-report` | Download study executive DOCX report |
+| GET | `/api/research-findings` | Cross-study findings summary |
+
 ### Datasets and Versions
 
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/api/studies/{study_id}/datasets/register` | Register staged CSV evidence |
 | GET | `/api/studies/{study_id}/datasets` | List datasets and versions with diagnosis status |
+| GET | `/api/registrations/{registration_id}` | Dataset registration detail |
 | POST | `/api/registrations/{registration_id}/configure` | Promote upload into immutable version and analyze |
 | GET | `/api/versions/{version_id}` | Version bundle |
 | GET | `/api/versions/{version_id}/analysis` | Version, profile, diagnosis, and timeline |
 | POST | `/api/versions/{version_id}/diagnosis/run?recompute=false` | Run or recompute diagnosis |
+| DELETE | `/api/versions/{version_id}` | Delete a version |
 | GET | `/api/versions/{version_id}/profile` | Profile report |
 | GET | `/api/versions/{version_id}/diagnosis` | Diagnosis report |
 | GET | `/api/versions/{version_id}/semantic-diff` | SCM/DSI evidence |
@@ -228,7 +257,7 @@ Current verification commands:
 
 ```powershell
 cd backend
-..\backend\venv\Scripts\python.exe -m pytest
+.\venv\Scripts\python.exe -m pytest
 
 cd ..\frontend
 npm.cmd run build
@@ -236,5 +265,5 @@ npm.cmd run build
 
 Latest local result:
 
-- Backend: 59 passed
+- Backend: 61 passed
 - Frontend: production build passed with a webpack entrypoint size warning

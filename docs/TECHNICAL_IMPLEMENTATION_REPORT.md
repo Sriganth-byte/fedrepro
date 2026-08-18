@@ -365,6 +365,6 @@ Generated variants are now treated as normal immutable dataset versions once sav
 
 Latest local verification:
 
-- Backend: 59 passed
+- Backend: 61 passed
 - Frontend: `npm.cmd run build` passed
 - Known frontend warning: webpack entrypoint size is slightly above the default recommendation

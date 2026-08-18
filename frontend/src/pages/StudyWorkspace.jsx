@@ -52,6 +52,9 @@ export default function StudyWorkspace() {
   const [diagnosis,         setDiagnosis]         = useState(null);
   const [diagnosisContract, setDiagnosisContract] = useState(null);
   const [semanticHistory,   setSemanticHistory]   = useState([]);
+  const [instantInsight,    setInstantInsight]    = useState(null);
+  const [aiAnalysis,        setAiAnalysis]        = useState(null);
+  const [aiJob,             setAiJob]             = useState(null);
   const [versionStatus,     setVersionStatus]     = useState("");
   const [versionLoading,    setVersionLoading]    = useState(false);
 
@@ -84,6 +87,9 @@ export default function StudyWorkspace() {
           : null
       );
       setSemanticHistory(analysis.timeline);
+      setInstantInsight(analysis.instant_insight);
+      setAiAnalysis(analysis.ai_analysis);
+      setAiJob(analysis.ai_job);
       setActive(nextActive);
     } catch (err) {
       setVersionStatus(err.response?.data?.detail || "Could not load this version's analysis.");
@@ -100,6 +106,7 @@ export default function StudyWorkspace() {
         setVersion(null); setProfile(null);
         setDiagnosis(null); setDiagnosisContract(null);
         setSemanticHistory([]);
+        setInstantInsight(null); setAiAnalysis(null); setAiJob(null);
       }
       await refresh();
       setVersionStatus("Version deleted successfully.");
@@ -130,6 +137,7 @@ export default function StudyWorkspace() {
     versions:  <VersionPanel
                  study={study} datasets={datasets} selectedVersion={version}
                  profile={profile} semanticHistory={semanticHistory}
+                 instantInsight={instantInsight} aiAnalysis={aiAnalysis} aiJob={aiJob}
                  onVersion={selectVersion} onDelete={deleteVersion}
                  onOpenDiagnosis={() => setActive("diagnosis")}
                  status={versionStatus}
@@ -138,6 +146,7 @@ export default function StudyWorkspace() {
                  study={study} datasets={datasets} version={version}
                  profile={profile} diagnosis={diagnosis}
                  initialContract={diagnosisContract}
+                 instantInsight={instantInsight} aiAnalysis={aiAnalysis} aiJob={aiJob}
                  versionStatus={versionStatus}
                  onVersion={id => selectVersion(id, "diagnosis")}
                  onOpenVariants={() => setActive("variants")}

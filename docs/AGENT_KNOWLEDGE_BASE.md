@@ -1,6 +1,6 @@
 # FedRepro Agent Knowledge Base
 
-**Last updated:** 2026-08-11
+**Last updated:** 2026-08-16
 **Migration head:** `0006_variant_generator`
 **Purpose:** Fast-load reference for future engineering work.
 
@@ -177,7 +177,7 @@ Current checks:
 
 ```powershell
 cd backend
-..\backend\venv\Scripts\python.exe -m pytest
+.\venv\Scripts\python.exe -m pytest
 
 cd ..\frontend
 npm.cmd run build
@@ -185,7 +185,7 @@ npm.cmd run build
 
 Latest known result:
 
-- backend: 59 passed
+- backend: 61 passed
 - frontend: build passed with webpack entrypoint size warning
 
 ## Known Footguns
