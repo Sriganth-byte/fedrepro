@@ -1,6 +1,16 @@
 import axios from "axios";
 
 const api = axios.create({ baseURL: "/api", timeout: 660000 });
+
+export function getApiErrorMessage(error, fallback = "Request failed. Please try again.") {
+  const detail = error.response?.data?.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) return detail.map((item) => item.msg || item.message || String(item)).join("; ");
+  if (error.response?.status === 504) return "The backend took too long to respond. Please retry once the server finishes processing.";
+  if (error.code === "ECONNABORTED") return "The request timed out. Please try again.";
+  return fallback;
+}
+
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem("fedrepro_token");
   if (token) config.headers.Authorization = `Bearer ${token}`;

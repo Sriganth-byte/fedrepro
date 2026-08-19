@@ -9,7 +9,7 @@ import {
   Zap
 } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
-import { datasetApi, studyApi } from "../api/client";
+import { datasetApi, getApiErrorMessage, studyApi } from "../api/client";
 import { Badge, Notice, PageHeader, Skeleton } from "../components/UI";
 import {
   DiagnosisPanel,
@@ -57,19 +57,35 @@ export default function StudyWorkspace() {
   const [aiJob,             setAiJob]             = useState(null);
   const [versionStatus,     setVersionStatus]     = useState("");
   const [versionLoading,    setVersionLoading]    = useState(false);
+  const [loadError,         setLoadError]         = useState("");
 
-  const refresh = async () => setDatasets(await datasetApi.list(studyId));
+  const refresh = async () => {
+    try {
+      setDatasets(await datasetApi.list(studyId));
+    } catch (err) {
+      setVersionStatus(getApiErrorMessage(err, "Could not refresh datasets."));
+    }
+  };
 
   useEffect(() => {
+    setLoadError("");
+    setStudy(null);
+    let cancelled = false;
     Promise.all([
       studyApi.get(studyId),
       datasetApi.list(studyId),
       studyApi.currentConfiguration(studyId),
     ]).then(([studyResult, datasetResult, configResult]) => {
+      if (cancelled) return;
       setStudy(studyResult);
       setDatasets(datasetResult);
       setConfiguration(configResult);
+    }).catch((err) => {
+      if (!cancelled) setLoadError(getApiErrorMessage(err, "Could not load this study workspace."));
     });
+    return () => {
+      cancelled = true;
+    };
   }, [studyId]);
 
   const selectVersion = async (idOrVersion, nextActive = "versions") => {
@@ -92,7 +108,7 @@ export default function StudyWorkspace() {
       setAiJob(analysis.ai_job);
       setActive(nextActive);
     } catch (err) {
-      setVersionStatus(err.response?.data?.detail || "Could not load this version's analysis.");
+      setVersionStatus(getApiErrorMessage(err, "Could not load this version's analysis."));
     } finally {
       setVersionLoading(false);
     }
@@ -111,9 +127,22 @@ export default function StudyWorkspace() {
       await refresh();
       setVersionStatus("Version deleted successfully.");
     } catch (err) {
-      setVersionStatus(err.response?.data?.detail || "Could not delete this version.");
+      setVersionStatus(getApiErrorMessage(err, "Could not delete this version."));
     }
   };
+
+  if (loadError) {
+    return (
+      <div className="workspace-shell" style={{ padding: "var(--sp-5) var(--sp-6)" }}>
+        <Link className="eyebrow" to="/studies" style={{ textDecoration: "none" }}>
+          <ArrowLeft size={12} aria-hidden="true" /> All ML studies
+        </Link>
+        <div style={{ marginTop: "var(--sp-4)" }}>
+          <Notice error>{loadError}</Notice>
+        </div>
+      </div>
+    );
+  }
 
   if (!study) return <WorkspaceSkeleton />;
 

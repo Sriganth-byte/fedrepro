@@ -1,0 +1,182 @@
+{
+  "versions": [
+    {
+      "version": "V1",
+      "name": "Raw Baseline",
+      "rows": 500,
+      "columns": 58,
+      "missing_pct": 0.34,
+      "duplicate_pct": 3.0,
+      "outlier_pct": 0.36,
+      "class_distribution": {
+        "No": 344,
+        "Yes": 156
+      },
+      "minority_class_pct": 31.2,
+      "mlrs": 21.14,
+      "lrs": 17.39,
+      "findings": 4,
+      "quality": {
+        "Completeness": 99.66,
+        "Uniqueness": 97.0,
+        "Consistency": 95.55,
+        "Outlier Health": 99.64,
+        "Class Balance": 62.4,
+        "Leakage Safety": 82.61,
+        "Schema Quality": 98.62,
+        "Validity": 100.0
+      },
+      "leakage_risk_features": [
+        "AnnualIncome",
+        "BonusAmount",
+        "EmployeeID",
+        "ExitInterviewStatus",
+        "MaritalStatus",
+        "MonthlyRate"
+      ],
+      "mlrs_delta": null,
+      "lrs_delta": null
+    },
+    {
+      "version": "V2",
+      "name": "Quality Improved",
+      "rows": 500,
+      "columns": 58,
+      "missing_pct": 0.04,
+      "duplicate_pct": 0.0,
+      "outlier_pct": 0.33,
+      "class_distribution": {
+        "No": 343,
+        "Yes": 157
+      },
+      "minority_class_pct": 31.4,
+      "mlrs": 16.25,
+      "lrs": 16.96,
+      "findings": 3,
+      "quality": {
+        "Completeness": 99.96,
+        "Uniqueness": 100.0,
+        "Consistency": 100.0,
+        "Outlier Health": 99.67,
+        "Class Balance": 62.8,
+        "Leakage Safety": 83.04,
+        "Schema Quality": 98.62,
+        "Validity": 100.0
+      },
+      "leakage_risk_features": [
+        "AnnualIncome",
+        "BonusAmount",
+        "EmployeeID",
+        "ExitInterviewStatus",
+        "MaritalStatus",
+        "MonthlyIncome",
+        "MonthlyRate"
+      ],
+      "mlrs_delta": -4.89,
+      "lrs_delta": -0.43
+    },
+    {
+      "version": "V3",
+      "name": "ML Ready",
+      "rows": 500,
+      "columns": 55,
+      "missing_pct": 0.0,
+      "duplicate_pct": 0.0,
+      "outlier_pct": 0.33,
+      "class_distribution": {
+        "No": 343,
+        "Yes": 157
+      },
+      "minority_class_pct": 31.4,
+      "mlrs": 15.32,
+      "lrs": 12.76,
+      "findings": 3,
+      "quality": {
+        "Completeness": 100.0,
+        "Uniqueness": 100.0,
+        "Consistency": 100.0,
+        "Outlier Health": 99.67,
+        "Class Balance": 62.8,
+        "Leakage Safety": 87.24,
+        "Schema Quality": 99.45,
+        "Validity": 100.0
+      },
+      "leakage_risk_features": [
+        "AnnualIncome",
+        "BonusAmount",
+        "EmployeeID",
+        "MaritalStatus",
+        "MonthlyIncome",
+        "MonthlyRate"
+      ],
+      "mlrs_delta": -0.93,
+      "lrs_delta": -4.2
+    },
+    {
+      "version": "V4",
+      "name": "Feature Engineered",
+      "rows": 500,
+      "columns": 65,
+      "missing_pct": 0.0,
+      "duplicate_pct": 0.0,
+      "outlier_pct": 0.6,
+      "class_distribution": {
+        "No": 343,
+        "Yes": 157
+      },
+      "minority_class_pct": 31.4,
+      "mlrs": 16.0,
+      "lrs": 13.08,
+      "findings": 3,
+      "quality": {
+        "Completeness": 100.0,
+        "Uniqueness": 100.0,
+        "Consistency": 100.0,
+        "Outlier Health": 99.4,
+        "Class Balance": 62.8,
+        "Leakage Safety": 86.92,
+        "Schema Quality": 99.54,
+        "Validity": 100.0
+      },
+      "leakage_risk_features": [
+        "AnnualIncome",
+        "BonusAmount",
+        "CompensationIndex",
+        "EmployeeID",
+        "IncomePerWorkingYear",
+        "MaritalStatus",
+        "MonthlyIncome",
+        "MonthlyRate"
+      ],
+      "mlrs_delta": 0.68,
+      "lrs_delta": 0.32
+    }
+  ],
+  "transitions": [
+    {
+      "label": "V1 -> V2",
+      "scm": 19.955,
+      "dsi": 3.748,
+      "columns_added": 0,
+      "columns_removed": 0,
+      "missingness_change_pct": -0.3
+    },
+    {
+      "label": "V2 -> V3",
+      "scm": 14.422,
+      "dsi": 1.195,
+      "columns_added": 0,
+      "columns_removed": 3,
+      "missingness_change_pct": -0.041
+    },
+    {
+      "label": "V3 -> V4",
+      "scm": 15.0,
+      "dsi": 0.0,
+      "columns_added": 10,
+      "columns_removed": 0,
+      "missingness_change_pct": 0.0
+    }
+  ],
+  "variants": []
+}

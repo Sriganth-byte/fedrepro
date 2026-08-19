@@ -9,10 +9,10 @@ import {
   Bar, BarChart, CartesianGrid, Cell,
   ResponsiveContainer, Tooltip, XAxis, YAxis
 } from "recharts";
-import { dashboardApi } from "../api/client";
+import { dashboardApi, getApiErrorMessage } from "../api/client";
 import {
   Badge, Button, Card, DataTable,
-  MetricCard, PageHeader, SkeletonCard
+  MetricCard, Notice, PageHeader, SkeletonCard
 } from "../components/UI";
 
 /* Custom chart tooltip */
@@ -80,8 +80,34 @@ function StatStrip({ data }) {
 
 export default function DashboardPage() {
   const [data, setData] = useState(null);
+  const [error, setError] = useState("");
 
-  useEffect(() => { dashboardApi.get().then(setData); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    dashboardApi.get()
+      .then((result) => {
+        if (!cancelled) setData(result);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(getApiErrorMessage(err, "Could not load dashboard data."));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (error) {
+    return (
+      <>
+        <PageHeader
+          eyebrow="Framework overview"
+          title="Research Dashboard"
+          description="A concise view of registered evidence, version activity, and deterministic risk signals across your research workspace."
+        />
+        <Notice error>{error}</Notice>
+      </>
+    );
+  }
 
   if (!data) {
     return (

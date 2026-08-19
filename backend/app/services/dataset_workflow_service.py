@@ -60,7 +60,7 @@ class DatasetWorkflowService:
             existing = self.db.query(DatasetVersion).filter(DatasetVersion.registration_id == registration.id).first()
             if existing:
                 return existing
-            raise ValueError("Registration is not available for configuration")
+            raise ValueError("Registration is not available for configuration: status is completed but no dataset version is linked")
         columns = registration.metadata_json["column_names"]
         config = payload.model_dump()
         self._validate_configuration(study.ml_task, columns, config)
@@ -292,6 +292,7 @@ class DatasetWorkflowService:
         try:
             AIInsightJobService(self.db).enqueue_version_analysis(study.id, version.id, priority=3)
         except Exception as exc:
+            self.db.rollback()
             logger.info("Skipping automatic AI interpretation for version %s: %s", version.id, exc)
 
     def _persist_instant_and_enqueue(self, study: Study, version: DatasetVersion) -> None:
@@ -304,6 +305,7 @@ class DatasetWorkflowService:
         try:
             AIInsightJobService(self.db).enqueue_version_analysis(study.id, version.id, priority=3)
         except Exception as exc:
+            self.db.rollback()
             logger.info("Skipping AI insight enqueue for version %s: %s", version.id, exc)
 
     def refresh_semantic_report(self, report: SemanticDiffReport) -> bool:

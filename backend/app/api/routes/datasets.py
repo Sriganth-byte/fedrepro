@@ -1,4 +1,5 @@
 import json
+import logging
 import tempfile
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from app.services.study_service import StudyService
 from app.utilities.hashing import canonical_hash
 
 router = APIRouter(tags=["dataset evidence"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/studies/{study_id}/datasets/register", status_code=201)
@@ -77,8 +79,21 @@ def configure_dataset(registration_id: int, payload: ConfigurationCreate, db: Se
         raise ValueError("Registration not found")
     dataset = db.get(Dataset, registration.dataset_id)
     study = StudyService(db).get_owned(dataset.study_id, user.id)
-    version = DatasetWorkflowService(db).configure_and_analyze(study, user.id, registration_id, payload)
-    return version_bundle(db, version)
+    log_context = {
+        "registration_id": registration.id,
+        "dataset_id": dataset.id if dataset else None,
+        "study_id": study.id,
+        "filename": registration.original_filename,
+    }
+    try:
+        version = DatasetWorkflowService(db).configure_and_analyze(study, user.id, registration_id, payload)
+        return version_bundle(db, version)
+    except ValueError:
+        raise
+    except Exception:
+        db.rollback()
+        logger.exception("Dataset configuration failed", extra=log_context)
+        raise
 
 
 @router.get("/versions/{version_id}/explanation-report")
@@ -519,6 +534,10 @@ def semantic_payload(item):
 
 def version_bundle(db, version):
     configuration = db.get(DatasetConfiguration, version.configuration_id)
+    if not configuration:
+        raise ValueError("Dataset version is incomplete: configuration missing")
+    if not version.fingerprint:
+        raise ValueError("Dataset version is incomplete: fingerprint missing")
     diff = db.query(SemanticDiffReport).filter(SemanticDiffReport.current_version_id == version.id).first()
     profile_row = db.query(DatasetProfileReport).filter(DatasetProfileReport.version_id == version.id).first()
     diagnosis_row = db.query(DiagnosisReport).filter(DiagnosisReport.version_id == version.id).first()

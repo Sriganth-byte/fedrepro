@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle2, ClipboardCheck, Copy, Database, Edit3, Eye, FileCheck2, FileStack, Gauge, GitBranch, GitCompare, Loader2, Network, ScanSearch, ShieldCheck, Sparkles, TableProperties, Target, Trash2, UploadCloud, Zap } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { aiApi, datasetApi, studyApi, variantApi } from "../../api/client";
+import { aiApi, datasetApi, getApiErrorMessage, studyApi, variantApi } from "../../api/client";
 import { Badge, Button, Card, CopyButton, DataTable, Empty, Field, MetricCard, Notice, Skeleton, SkeletonCard, StatusDot } from "../../components/UI";
 
 const emptyProtocol = { name: "", ml_task: "", domain: "", focus_issue: "", target_column: "", primary_metric: "", objective: "", research_question: "", hypothesis: "", baseline_model: "", validation_strategy: "", random_seed: "", feature_scope: "", intended_use_case: "" };
@@ -535,7 +535,8 @@ function ConfigurationPanel({ study, datasets, refresh, onVersion }) {
 export function EnhancedEvidencePanel({ study, datasets, refresh, onVersion }) {
   const registrations=datasets.flatMap((dataset)=>dataset.registrations.map((registration)=>({...registration,dataset_name:dataset.name,dataset_versions:dataset.versions})));
   const latestVersion=datasets.flatMap((dataset)=>dataset.versions.map((version)=>({...version,dataset_name:dataset.name}))).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at)).at(-1);
-  const configurableRegistrations=registrations.filter((registration)=>!registration.dataset_versions?.some((version)=>version.registration_id===registration.id));
+  const isConfigurableRegistration=(registration)=>registration.status==="registered"&&!registration.dataset_versions?.some((version)=>version.registration_id===registration.id);
+  const configurableRegistrations=registrations.filter(isConfigurableRegistration);
   const [selectedId,setSelectedId]=useState(configurableRegistrations[0]?.id ? String(configurableRegistrations[0].id) : registrations[0]?.id ? String(registrations[0].id) : "");
   const selected=registrations.find((item)=>String(item.id)===String(selectedId))||registrations[0];
   const [file,setFile]=useState(null);
@@ -549,7 +550,14 @@ export function EnhancedEvidencePanel({ study, datasets, refresh, onVersion }) {
   const [progress,setProgress]=useState(0);
   const [report,setReport]=useState(null);
   const [reportStatus,setReportStatus]=useState("");
+  useEffect(()=>{
+    if(!configurableRegistrations.length)return;
+    if(!configurableRegistrations.some((registration)=>String(registration.id)===String(selectedId))){
+      setSelectedId(String(configurableRegistrations[0].id));
+    }
+  },[configurableRegistrations.map((registration)=>`${registration.id}:${registration.status}`).join("|"),selectedId]);
   const configureRegistration=(row)=>{
+    if(!isConfigurableRegistration(row))return;
     setSelectedId(String(row.id));
     window.setTimeout(()=>document.getElementById("dataset-evidence-configuration")?.scrollIntoView({behavior:"smooth",block:"start"}),0);
   };
@@ -630,7 +638,7 @@ export function EnhancedEvidencePanel({ study, datasets, refresh, onVersion }) {
         {key:"missing",label:"Missing",render:(row)=>row.metadata?.missing_total??"Not available"},
         {key:"created_at",label:"Registered",render:(row)=>new Date(row.created_at).toLocaleDateString()},
         {key:"actions",label:"Actions",render:(row)=>{
-          const alreadyConfigured=row.dataset_versions?.some((version)=>version.registration_id===row.id);
+          const alreadyConfigured=!isConfigurableRegistration(row);
           return <div className="evidence-row-actions">
             <Button variant="secondary compact" disabled={alreadyConfigured} onClick={()=>configureRegistration(row)}>{alreadyConfigured?<><CheckCircle2 size={13}/>Configured</>:<><ClipboardCheck size={13}/>Configure</>}</Button>
             <Button variant="secondary compact" onClick={()=>loadRegistrationReport(row)}><Eye size={13}/>View report</Button>
@@ -939,16 +947,31 @@ function EnhancedConfigurationPanel({ study, registrations, selected, selectedId
   const activeRegistrationId=selectedId||String(selected?.id||"");
   const [form,setForm]=useState({target_column:"",primary_metric:"",validation_strategy:"",feature_selection_mode:"",selected_features:[],scaling_strategy:""});
   const [status,setStatus]=useState("");
+  const configurationPayload=()=>{
+    if(study.ml_task==="clustering"){
+      return {
+        feature_selection_mode: form.feature_selection_mode||null,
+        selected_features: form.selected_features||[],
+        scaling_strategy: form.scaling_strategy||null
+      };
+    }
+    return {
+      target_column: form.target_column||null,
+      primary_metric: form.primary_metric||null,
+      validation_strategy: form.validation_strategy||null,
+      selected_features: []
+    };
+  };
   const submit=async(event)=>{
     event.preventDefault();
     setStatus("Creating immutable version and deterministic reports...");
     try{
-      const result=await datasetApi.configure(activeRegistrationId,form);
+      const result=await datasetApi.configure(activeRegistrationId,configurationPayload());
       setStatus("Configuration complete. Version, fingerprint, profile, and diagnosis created.");
       await refresh();
       onVersion(result);
     }catch(err){
-      setStatus(err.response?.data?.detail||"Configuration failed");
+      setStatus(getApiErrorMessage(err,"Configuration failed"));
     }
   };
   return <details id="dataset-evidence-configuration" className="collapsible-card" open>
@@ -3682,5 +3705,4 @@ export function VariantGeneratorPanel({ version, diagnosis }) {
     </div>
   );
 }
-
 

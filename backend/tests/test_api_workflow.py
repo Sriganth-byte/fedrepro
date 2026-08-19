@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from app.api.routes.ai import resolve_evidence
 from app.core.database import SessionLocal
 from app.main import app
-from app.models.entities import DatasetVersion, DiagnosisReport, SemanticDiffReport, Study, User
+from app.models.entities import DatasetFingerprint, DatasetVersion, DiagnosisReport, SemanticDiffReport, Study, User
 from app.services.diagnosis_service import DiagnosisService
 from app.services.evidence_warmup_service import EvidenceWarmupService
 from app.services.semantic_diff_service import SemanticDiffService
@@ -98,6 +98,13 @@ def test_complete_phase_one_api_workflow(tmp_path):
         assert version["version_number"] == 1
         assert len(version["fingerprint"]["combined_fingerprint"]) == 64
         assert version["semantic_diff"] is None
+        repeat_configure_response = client.post(f"/api/registrations/{registration['id']}/configure", headers=headers, json={"target_column": "placed", "primary_metric": "f1_weighted", "validation_strategy": "stratified_holdout", "selected_features": []})
+        assert repeat_configure_response.status_code == 201, repeat_configure_response.text
+        assert repeat_configure_response.json()["id"] == version["id"]
+        dataset_list_response = client.get(f"/api/studies/{study['id']}/datasets", headers=headers)
+        assert dataset_list_response.status_code == 200, dataset_list_response.text
+        listed_registration = dataset_list_response.json()[0]["registrations"][0]
+        assert listed_registration["status"] == "completed"
         profile = client.get(f"/api/versions/{version['id']}/profile", headers=headers)
         diagnosis = client.get(f"/api/versions/{version['id']}/diagnosis", headers=headers)
         assert profile.status_code == 200
@@ -208,6 +215,13 @@ def test_complete_phase_one_api_workflow(tmp_path):
             assert llm_evidence["selected_version"]["id"] == version_v2["id"]
             assert len(llm_evidence["version_history"]) == 2
             assert llm_evidence["version_history"][1]["semantic_diff_from_previous"] is not None
+            fingerprint = db.query(DatasetFingerprint).filter(DatasetFingerprint.version_id == version_v2["id"]).first()
+            assert fingerprint
+            db.delete(fingerprint)
+            db.commit()
+        incomplete_analysis = client.get(f"/api/versions/{version_v2['id']}/analysis", headers=headers)
+        assert incomplete_analysis.status_code == 400, incomplete_analysis.text
+        assert incomplete_analysis.json()["detail"] == "Dataset version is incomplete: fingerprint missing"
 
         delete_v2_response = client.delete(f"/api/versions/{version_v2['id']}", headers=headers)
         assert delete_v2_response.status_code == 204, delete_v2_response.text

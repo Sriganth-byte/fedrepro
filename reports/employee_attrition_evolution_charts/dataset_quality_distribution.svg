@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1118" height="306" viewBox="0 0 1118 306">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="28" y="34" font-family="Inter, Arial" font-size="22" font-weight="700" fill="#111827">Dataset Quality Distribution Across Versions</text>
+<text x="197.0" y="52" text-anchor="middle" font-family="Inter, Arial" font-size="11" font-weight="700" fill="#475569">Completeness</text>
+<text x="315.0" y="52" text-anchor="middle" font-family="Inter, Arial" font-size="11" font-weight="700" fill="#475569">Uniqueness</text>
+<text x="433.0" y="52" text-anchor="middle" font-family="Inter, Arial" font-size="11" font-weight="700" fill="#475569">Consistency</text>
+<text x="551.0" y="52" text-anchor="middle" font-family="Inter, Arial" font-size="11" font-weight="700" fill="#475569">Outlier Health</text>
+<text x="669.0" y="52" text-anchor="middle" font-family="Inter, Arial" font-size="11" font-weight="700" fill="#475569">Class Balance</text>
+<text x="787.0" y="52" text-anchor="middle" font-family="Inter, Arial" font-size="11" font-weight="700" fill="#475569">Leakage Safety</text>
+<text x="905.0" y="52" text-anchor="middle" font-family="Inter, Arial" font-size="11" font-weight="700" fill="#475569">Schema Quality</text>
+<text x="1023.0" y="52" text-anchor="middle" font-family="Inter, Arial" font-size="11" font-weight="700" fill="#475569">Validity</text>
+<text x="122" y="100" text-anchor="end" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#111827">V1</text>
+<rect x="138" y="70" width="114" height="44" rx="4" fill="hsl(119,72%,42%)"><title>V1 Completeness: 99.66</title></rect>
+<text x="195.0" y="99" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">99.66</text>
+<rect x="256" y="70" width="114" height="44" rx="4" fill="hsl(116,72%,42%)"><title>V1 Uniqueness: 97</title></rect>
+<text x="313.0" y="99" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">97</text>
+<rect x="374" y="70" width="114" height="44" rx="4" fill="hsl(114,72%,42%)"><title>V1 Consistency: 95.55</title></rect>
+<text x="431.0" y="99" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">95.55</text>
+<rect x="492" y="70" width="114" height="44" rx="4" fill="hsl(119,72%,42%)"><title>V1 Outlier Health: 99.64</title></rect>
+<text x="549.0" y="99" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">99.64</text>
+<rect x="610" y="70" width="114" height="44" rx="4" fill="hsl(74,72%,42%)"><title>V1 Class Balance: 62.4</title></rect>
+<text x="667.0" y="99" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">62.4</text>
+<rect x="728" y="70" width="114" height="44" rx="4" fill="hsl(99,72%,42%)"><title>V1 Leakage Safety: 82.61</title></rect>
+<text x="785.0" y="99" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">82.61</text>
+<rect x="846" y="70" width="114" height="44" rx="4" fill="hsl(118,72%,42%)"><title>V1 Schema Quality: 98.62</title></rect>
+<text x="903.0" y="99" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">98.62</text>
+<rect x="964" y="70" width="114" height="44" rx="4" fill="hsl(120,72%,42%)"><title>V1 Validity: 100</title></rect>
+<text x="1021.0" y="99" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">100</text>
+<text x="122" y="148" text-anchor="end" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#111827">V2</text>
+<rect x="138" y="118" width="114" height="44" rx="4" fill="hsl(119,72%,42%)"><title>V2 Completeness: 99.96</title></rect>
+<text x="195.0" y="147" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">99.96</text>
+<rect x="256" y="118" width="114" height="44" rx="4" fill="hsl(120,72%,42%)"><title>V2 Uniqueness: 100</title></rect>
+<text x="313.0" y="147" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">100</text>
+<rect x="374" y="118" width="114" height="44" rx="4" fill="hsl(120,72%,42%)"><title>V2 Consistency: 100</title></rect>
+<text x="431.0" y="147" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">100</text>
+<rect x="492" y="118" width="114" height="44" rx="4" fill="hsl(119,72%,42%)"><title>V2 Outlier Health: 99.67</title></rect>
+<text x="549.0" y="147" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">99.67</text>
+<rect x="610" y="118" width="114" height="44" rx="4" fill="hsl(75,72%,42%)"><title>V2 Class Balance: 62.8</title></rect>
+<text x="667.0" y="147" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">62.8</text>
+<rect x="728" y="118" width="114" height="44" rx="4" fill="hsl(99,72%,42%)"><title>V2 Leakage Safety: 83.04</title></rect>
+<text x="785.0" y="147" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">83.04</text>
+<rect x="846" y="118" width="114" height="44" rx="4" fill="hsl(118,72%,42%)"><title>V2 Schema Quality: 98.62</title></rect>
+<text x="903.0" y="147" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">98.62</text>
+<rect x="964" y="118" width="114" height="44" rx="4" fill="hsl(120,72%,42%)"><title>V2 Validity: 100</title></rect>
+<text x="1021.0" y="147" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">100</text>
+<text x="122" y="196" text-anchor="end" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#111827">V3</text>
+<rect x="138" y="166" width="114" height="44" rx="4" fill="hsl(120,72%,42%)"><title>V3 Completeness: 100</title></rect>
+<text x="195.0" y="195" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">100</text>
+<rect x="256" y="166" width="114" height="44" rx="4" fill="hsl(120,72%,42%)"><title>V3 Uniqueness: 100</title></rect>
+<text x="313.0" y="195" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">100</text>
+<rect x="374" y="166" width="114" height="44" rx="4" fill="hsl(120,72%,42%)"><title>V3 Consistency: 100</title></rect>
+<text x="431.0" y="195" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">100</text>
+<rect x="492" y="166" width="114" height="44" rx="4" fill="hsl(119,72%,42%)"><title>V3 Outlier Health: 99.67</title></rect>
+<text x="549.0" y="195" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">99.67</text>
+<rect x="610" y="166" width="114" height="44" rx="4" fill="hsl(75,72%,42%)"><title>V3 Class Balance: 62.8</title></rect>
+<text x="667.0" y="195" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">62.8</text>
+<rect x="728" y="166" width="114" height="44" rx="4" fill="hsl(104,72%,42%)"><title>V3 Leakage Safety: 87.24</title></rect>
+<text x="785.0" y="195" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">87.24</text>
+<rect x="846" y="166" width="114" height="44" rx="4" fill="hsl(119,72%,42%)"><title>V3 Schema Quality: 99.45</title></rect>
+<text x="903.0" y="195" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">99.45</text>
+<rect x="964" y="166" width="114" height="44" rx="4" fill="hsl(120,72%,42%)"><title>V3 Validity: 100</title></rect>
+<text x="1021.0" y="195" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">100</text>
+<text x="122" y="244" text-anchor="end" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#111827">V4</text>
+<rect x="138" y="214" width="114" height="44" rx="4" fill="hsl(120,72%,42%)"><title>V4 Completeness: 100</title></rect>
+<text x="195.0" y="243" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">100</text>
+<rect x="256" y="214" width="114" height="44" rx="4" fill="hsl(120,72%,42%)"><title>V4 Uniqueness: 100</title></rect>
+<text x="313.0" y="243" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">100</text>
+<rect x="374" y="214" width="114" height="44" rx="4" fill="hsl(120,72%,42%)"><title>V4 Consistency: 100</title></rect>
+<text x="431.0" y="243" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">100</text>
+<rect x="492" y="214" width="114" height="44" rx="4" fill="hsl(119,72%,42%)"><title>V4 Outlier Health: 99.4</title></rect>
+<text x="549.0" y="243" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">99.4</text>
+<rect x="610" y="214" width="114" height="44" rx="4" fill="hsl(75,72%,42%)"><title>V4 Class Balance: 62.8</title></rect>
+<text x="667.0" y="243" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">62.8</text>
+<rect x="728" y="214" width="114" height="44" rx="4" fill="hsl(104,72%,42%)"><title>V4 Leakage Safety: 86.92</title></rect>
+<text x="785.0" y="243" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">86.92</text>
+<rect x="846" y="214" width="114" height="44" rx="4" fill="hsl(119,72%,42%)"><title>V4 Schema Quality: 99.54</title></rect>
+<text x="903.0" y="243" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">99.54</text>
+<rect x="964" y="214" width="114" height="44" rx="4" fill="hsl(120,72%,42%)"><title>V4 Validity: 100</title></rect>
+<text x="1021.0" y="243" text-anchor="middle" font-family="Inter, Arial" font-size="13" font-weight="700" fill="#ffffff">100</text>
+</svg>

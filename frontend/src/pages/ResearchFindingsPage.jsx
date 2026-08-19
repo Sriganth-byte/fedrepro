@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { ArrowUpRight, BookOpenCheck, Database, FileStack, TrendingDown } from "lucide-react";
 import { Link } from "react-router-dom";
-import { studyApi } from "../api/client";
-import { Badge, Card, Empty, PageHeader, SkeletonCard } from "../components/UI";
+import { getApiErrorMessage, studyApi } from "../api/client";
+import { Badge, Card, Empty, Notice, PageHeader, SkeletonCard } from "../components/UI";
 
 /* Risk badge for MLRS scores */
 function RiskBadge({ score }) {
@@ -15,11 +15,23 @@ function RiskBadge({ score }) {
 export default function ResearchFindingsPage() {
   const [items,   setItems]   = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState("");
 
   useEffect(() => {
+    let cancelled = false;
     studyApi.allFindings()
-      .then(setItems)
-      .finally(() => setLoading(false));
+      .then((result) => {
+        if (!cancelled) setItems(result);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(getApiErrorMessage(err, "Could not load research findings."));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   return (
@@ -37,8 +49,10 @@ export default function ResearchFindingsPage() {
         </div>
       )}
 
+      {!loading && error && <Notice error>{error}</Notice>}
+
       {/* Empty state */}
-      {!loading && !items?.length && (
+      {!loading && !error && !items?.length && (
         <Card>
           <Empty icon={BookOpenCheck}>
             No research findings are available yet. Run a diagnosis on a dataset version to generate the first evidence report.

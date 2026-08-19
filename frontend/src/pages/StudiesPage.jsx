@@ -4,7 +4,7 @@ import {
   ClipboardCheck, Filter, FlaskConical,
   GitBranch, Plus, ShieldCheck, Target
 } from "lucide-react";
-import { studyApi } from "../api/client";
+import { getApiErrorMessage, studyApi } from "../api/client";
 import { Badge, Button, Card, DataTable, Field, Notice, PageHeader } from "../components/UI";
 
 const initial = {
@@ -79,9 +79,17 @@ export default function StudiesPage() {
   const [taskFilter, setTaskFilter] = useState("");
   const [form,       setForm]       = useState(initial);
   const [error,      setError]      = useState("");
+  const [loadError,  setLoadError]  = useState("");
   const [creating,   setCreating]   = useState(false);
 
-  const load = () => studyApi.list(search, taskFilter).then(setStudies);
+  const load = () => {
+    setLoadError("");
+    return studyApi.list(search, taskFilter)
+      .then(setStudies)
+      .catch((err) => {
+        setLoadError(getApiErrorMessage(err, "Could not load studies."));
+      });
+  };
   useEffect(() => { load(); }, []);
 
   const protocol  = buildProtocol(form);
@@ -119,7 +127,7 @@ export default function StudiesPage() {
       const study = await studyApi.create(payload);
       navigate(`/studies/${study.id}`);
     } catch (err) {
-      setError(err.response?.data?.detail || "Could not create study. Please try again.");
+      setError(getApiErrorMessage(err, "Could not create study. Please try again."));
       setCreating(false);
     }
   };
@@ -472,6 +480,9 @@ export default function StudiesPage() {
             </div>
 
             <div className="directory-table">
+              {loadError && (
+                <Notice error style={{ marginBottom: "var(--sp-3)" }}>{loadError}</Notice>
+              )}
               <DataTable
                 rows={studies}
                 columns={dirColumns}

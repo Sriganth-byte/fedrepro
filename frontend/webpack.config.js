@@ -13,7 +13,12 @@ module.exports = {
   devServer: {
     historyApiFallback: { disableDotRule: true, rewrites: [{ from: /./, to: "/index.html" }] },
     hot: true,
-    proxy: [{ context: ["/api"], target: "http://127.0.0.1:8000" }]
+    proxy: [{
+      context: ["/api"],
+      target: "http://127.0.0.1:8000",
+      timeout: 660000,
+      proxyTimeout: 660000
+    }]
   },
   optimization: { splitChunks: { chunks: "all", maxSize: 240000 } },
   performance: { maxAssetSize: 300000, maxEntrypointSize: 300000 }

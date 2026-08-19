@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timezone
 
 import httpx
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -38,21 +39,31 @@ class AIInsightJobService:
         self.settings = get_settings()
 
     def status_for_version(self, version_id: int) -> dict | None:
-        job = self.db.query(AIInsightJob).filter(
-            AIInsightJob.version_id == version_id,
-            AIInsightJob.task_type == self.task_type,
-        ).order_by(AIInsightJob.queued_at.desc()).first()
+        try:
+            job = self.db.query(AIInsightJob).filter(
+                AIInsightJob.version_id == version_id,
+                AIInsightJob.task_type == self.task_type,
+            ).order_by(AIInsightJob.queued_at.desc()).first()
+        except SQLAlchemyError as exc:
+            self.db.rollback()
+            logger.info("AI insight job status unavailable for version %s: %s", version_id, exc)
+            return None
         return self.job_payload(job) if job else None
 
     def cached_version_analysis(self, study_id: int, version_id: int) -> AIGeneratedExplanation | None:
         context, evidence_hash, _context_hash = self._context_and_hashes(study_id, version_id)
-        record = self.db.query(AIGeneratedExplanation).filter(
-            AIGeneratedExplanation.study_id == study_id,
-            AIGeneratedExplanation.explanation_type == self.task_type,
-            AIGeneratedExplanation.source_entity_id == version_id,
-            AIGeneratedExplanation.source_evidence_hash == evidence_hash,
-            AIGeneratedExplanation.prompt_version == self.prompt_version,
-        ).order_by(AIGeneratedExplanation.created_at.desc()).first()
+        try:
+            record = self.db.query(AIGeneratedExplanation).filter(
+                AIGeneratedExplanation.study_id == study_id,
+                AIGeneratedExplanation.explanation_type == self.task_type,
+                AIGeneratedExplanation.source_entity_id == version_id,
+                AIGeneratedExplanation.source_evidence_hash == evidence_hash,
+                AIGeneratedExplanation.prompt_version == self.prompt_version,
+            ).order_by(AIGeneratedExplanation.created_at.desc()).first()
+        except SQLAlchemyError as exc:
+            self.db.rollback()
+            logger.info("Cached AI version analysis unavailable for version %s: %s", version_id, exc)
+            return None
         if record and not AIExplanationService.is_fallback_content(record.content):
             return record
         return None
@@ -62,33 +73,38 @@ class AIInsightJobService:
         cached = None if force else self.cached_version_analysis(study_id, version_id)
         if cached:
             return {"status": "completed", "cached": True, "record": self.record_payload(cached)}
-        active = None if force else self.db.query(AIInsightJob).filter(
-            AIInsightJob.version_id == version_id,
-            AIInsightJob.task_type == self.task_type,
-            AIInsightJob.evidence_hash == evidence_hash,
-            AIInsightJob.context_hash == context_hash,
-            AIInsightJob.prompt_version == self.prompt_version,
-            AIInsightJob.status.in_(("queued", "running")),
-        ).order_by(AIInsightJob.queued_at.desc()).first()
-        if active:
-            return {"status": active.status, "cached": False, "job": self.job_payload(active)}
-        pending = self.db.query(AIInsightJob).filter(AIInsightJob.status.in_(("queued", "running"))).count()
-        if pending >= self.settings.ai_max_pending_jobs:
-            return {"status": "limited", "cached": False, "message": "AI job queue is full"}
-        job = AIInsightJob(
-            version_id=version_id,
-            study_id=study_id,
-            task_type=self.task_type,
-            priority=priority,
-            evidence_hash=evidence_hash,
-            context_hash=context_hash,
-            prompt_version=self.prompt_version,
-            model_name=self._preferred_model(),
-            status="queued",
-        )
-        self.db.add(job)
-        self.db.commit()
-        self.db.refresh(job)
+        try:
+            active = None if force else self.db.query(AIInsightJob).filter(
+                AIInsightJob.version_id == version_id,
+                AIInsightJob.task_type == self.task_type,
+                AIInsightJob.evidence_hash == evidence_hash,
+                AIInsightJob.context_hash == context_hash,
+                AIInsightJob.prompt_version == self.prompt_version,
+                AIInsightJob.status.in_(("queued", "running")),
+            ).order_by(AIInsightJob.queued_at.desc()).first()
+            if active:
+                return {"status": active.status, "cached": False, "job": self.job_payload(active)}
+            pending = self.db.query(AIInsightJob).filter(AIInsightJob.status.in_(("queued", "running"))).count()
+            if pending >= self.settings.ai_max_pending_jobs:
+                return {"status": "limited", "cached": False, "message": "AI job queue is full"}
+            job = AIInsightJob(
+                version_id=version_id,
+                study_id=study_id,
+                task_type=self.task_type,
+                priority=priority,
+                evidence_hash=evidence_hash,
+                context_hash=context_hash,
+                prompt_version=self.prompt_version,
+                model_name=self._preferred_model(),
+                status="queued",
+            )
+            self.db.add(job)
+            self.db.commit()
+            self.db.refresh(job)
+        except SQLAlchemyError as exc:
+            self.db.rollback()
+            logger.info("AI insight enqueue unavailable for version %s: %s", version_id, exc)
+            return {"status": "unavailable", "cached": False, "message": "AI insight job storage is unavailable", "context": context}
         if self.settings.ai_enabled and self.settings.ai_prefetch_enabled:
             threading.Thread(target=self.run_job_by_id, args=(job.id,), name=f"ai-insight-job-{job.id}", daemon=True).start()
         return {"status": job.status, "cached": False, "job": self.job_payload(job), "context": context}

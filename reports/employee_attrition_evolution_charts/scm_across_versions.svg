@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="430" viewBox="0 0 920 430">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="78" y="32" font-family="Inter, Arial" font-size="22" font-weight="700" fill="#111827">Semantic Change Magnitude Across Dataset Evolution</text>
+<text x="20" y="207.0" transform="rotate(-90 20 207.0)" font-family="Inter, Arial" font-size="13" fill="#475569">SCM</text>
+<line x1="78" x2="884" y1="356.0" y2="356.0" stroke="#e5e7eb"/>
+<text x="66" y="360.0" text-anchor="end" font-family="Inter, Arial" font-size="11" fill="#64748b">0</text>
+<line x1="78" x2="884" y1="296.4" y2="296.4" stroke="#e5e7eb"/>
+<text x="66" y="300.4" text-anchor="end" font-family="Inter, Arial" font-size="11" fill="#64748b">20</text>
+<line x1="78" x2="884" y1="236.8" y2="236.8" stroke="#e5e7eb"/>
+<text x="66" y="240.8" text-anchor="end" font-family="Inter, Arial" font-size="11" fill="#64748b">40</text>
+<line x1="78" x2="884" y1="177.2" y2="177.2" stroke="#e5e7eb"/>
+<text x="66" y="181.2" text-anchor="end" font-family="Inter, Arial" font-size="11" fill="#64748b">60</text>
+<line x1="78" x2="884" y1="117.6" y2="117.6" stroke="#e5e7eb"/>
+<text x="66" y="121.6" text-anchor="end" font-family="Inter, Arial" font-size="11" fill="#64748b">80</text>
+<line x1="78" x2="884" y1="58.0" y2="58.0" stroke="#e5e7eb"/>
+<text x="66" y="62.0" text-anchor="end" font-family="Inter, Arial" font-size="11" fill="#64748b">100</text>
+<rect x="137.1" y="296.5" width="150.5" height="59.5" rx="4" fill="#2563eb"><title>V1 -&gt; V2&#10;SCM: 19.95&#10;DSI: 3.75</title></rect>
+<text x="212.3" y="392" text-anchor="middle" font-family="Inter, Arial" font-size="12" fill="#334155">V1 -&gt; V2</text>
+<text x="212.3" y="286.5" text-anchor="middle" font-family="Inter, Arial" font-size="12" font-weight="700" fill="#111827">19.95</text>
+<rect x="405.8" y="313.0" width="150.5" height="43.0" rx="4" fill="#2563eb"><title>V2 -&gt; V3&#10;SCM: 14.42&#10;DSI: 1.2</title></rect>
+<text x="481.0" y="392" text-anchor="middle" font-family="Inter, Arial" font-size="12" fill="#334155">V2 -&gt; V3</text>
+<text x="481.0" y="303.0" text-anchor="middle" font-family="Inter, Arial" font-size="12" font-weight="700" fill="#111827">14.42</text>
+<rect x="674.4" y="311.3" width="150.5" height="44.7" rx="4" fill="#2563eb"><title>V3 -&gt; V4&#10;SCM: 15&#10;DSI: 0</title></rect>
+<text x="749.7" y="392" text-anchor="middle" font-family="Inter, Arial" font-size="12" fill="#334155">V3 -&gt; V4</text>
+<text x="749.7" y="301.3" text-anchor="middle" font-family="Inter, Arial" font-size="12" font-weight="700" fill="#111827">15</text>
+</svg>
