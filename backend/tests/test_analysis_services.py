@@ -236,4 +236,4 @@ def test_dataset_executive_summary_prompt_uses_compact_evidence():
     assert "new_signal" in prompt
     payload = AIExplanationService(None)._request_payload("dataset_executive_summary", prompt, stream=True)
     assert payload["stream"] is True
-    assert payload["options"]["num_predict"] == 1500
+    assert payload["options"]["num_predict"] == 2600

@@ -10,7 +10,7 @@ from app.utilities.hashing import canonical_hash
 
 
 class AIExplanationService:
-    prompt_version = "explanation-2.0"
+    prompt_version = "explanation-2.1"
     version_analysis_schema = {
         "type": "object",
         "properties": {
@@ -162,7 +162,7 @@ class AIExplanationService:
     def _request_payload(self, explanation_type: str, prompt: str, stream: bool) -> dict:
         version_analysis = explanation_type == "version_analysis"
         executive_summary = explanation_type == "dataset_executive_summary"
-        narrative_interpretation = explanation_type in {"semantic_diff_interpretation", "semantic_metrics", "dataset_executive_summary", "dataset_explanation_report"}
+        narrative_interpretation = explanation_type in {"semantic_diff_interpretation", "semantic_metrics", "dataset_executive_summary", "dataset_explanation_report", "diagnosis_report_interpretation"}
         return {
             "model": self.model,
             "prompt": prompt,
@@ -170,7 +170,7 @@ class AIExplanationService:
             "keep_alive": "10m",
             "options": {
                 "temperature": 0.25 if narrative_interpretation else 0.1,
-                "num_predict": self.settings.ai_version_analysis_max_tokens if version_analysis else self.settings.ai_report_max_tokens if executive_summary or explanation_type == "dataset_explanation_report" else 500,
+                "num_predict": self.settings.ai_version_analysis_max_tokens if version_analysis else self.settings.ai_report_max_tokens if narrative_interpretation else 900,
                 **({"num_ctx": 16384} if version_analysis else {}),
             },
         }
@@ -189,14 +189,14 @@ class AIExplanationService:
     def _prompt(kind: str, evidence: dict) -> str:
         if kind == "semantic_metrics":
             return (
-                "Interpret only these two DATASET VERSION metrics for a research user. "
+                "Act as a senior data-centric ML engineer interpreting these DATASET VERSION metrics for a research review. "
                 "SCM means Semantic Change Magnitude: the amount of structural/content change between dataset versions. "
                 "DSI means Distribution Shift Index: the amount of feature/target distribution movement between dataset versions. "
                 "These are dataset evidence metrics, not model similarity, not diagnostic similarity, not predictions, and not model performance. "
                 "Do not discuss model versions, prediction similarity, accuracy, or training results. Do not start with a generic phrase. "
-                "Use exactly two short sections titled SCM and DSI. Explain what each score means for dataset reproducibility and downstream ML caution. "
+                "Use clear Markdown sections titled SCM and DSI. Explain what each score means for dataset reproducibility, downstream ML caution, experiment comparability, and required review before training. "
                 "Make the wording specific to the supplied version transition and avoid generic reusable sentences. "
-                "Use only supplied evidence and clearly state that these scores alone do not prove model impact. "
+                "Use only supplied evidence and clearly state that these scores alone do not prove model impact. Provide detailed reasoning, not a small summary. "
                 f"Evidence:\n{json.dumps(evidence, default=str)}"
             )
         if kind == "semantic_diff_interpretation":
@@ -220,6 +220,7 @@ class AIExplanationService:
                 "Return well-formatted Markdown with clear section headings. Cover study purpose, dataset identity, target/evaluation setup, "
                 "data quality, semantic version change, reproducibility, ML training readiness, risks, and next research actions. "
                 "Make the explanation specific to the selected version, affected columns, target values, metrics, and observed changes. "
+                "Write in a senior-review style with enough depth to explain why each risk, limitation, or readiness claim follows from the evidence. "
                 "Do not output JSON, do not begin with a generic preface, and do not invent model results, causes, business facts, or guarantees. "
                 f"Evidence:\n{json.dumps(evidence, default=str)}"
             )
@@ -238,7 +239,8 @@ class AIExplanationService:
                 "Do not use generic filler, canned phrases, or raw JSON dumps. Do not say a dataset is safe unless the evidence supports that claim. "
                 "Answer the user's practical questions with evidence-bound language: readiness for ML training, leakage risk, stability, data quality, variant-generator implications, and experiment handoff. "
                 "Use clear Markdown sections with these exact headings: Executive Diagnosis, ML Training Readiness, Leakage Review, Stability Review, Quality Assessment, Diagnosis Statistics Interpretation, Variant Generator Guidance, Experiment Training Handoff, Supported Claims, Required Next Actions. "
-                "Each section must contain specific observations from the evidence and avoid repeating the same sentence structure across sections. "
+                "Each section must contain specific observations from the evidence and explain why those observations matter to a senior ML engineer. "
+                "Do not make sections tiny. Prefer complete paragraphs with concrete evidence, implications, and limitations. "
                 "When evidence is unavailable, state the missing evidence and the decision that cannot yet be supported. "
                 f"Evidence:\n{json.dumps(evidence, default=str)}"
             )

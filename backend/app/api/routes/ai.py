@@ -140,7 +140,10 @@ def _version_analysis_field_or_enqueue(db: Session, study, version_id: int, fiel
         }
     enqueue = service.enqueue_version_analysis(study.id, version_id, priority=1)
     instant = InstantInsightService(db).latest_payload(version_id) or {}
-    fallback = instant.get(field) or instant.get("summary") or "Generating enhanced interpretation..."
+    fallback = (
+        "Generating detailed senior ML engineer explanation from stored deterministic evidence. "
+        "Refresh this panel shortly to load the completed interpretation."
+    )
     return {
         "type": response_type,
         "version_id": version_id,

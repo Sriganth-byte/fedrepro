@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 class AIInsightJobService:
     task_type = "version_analysis"
-    prompt_version = "version-analysis-3.0"
+    prompt_version = "version-analysis-3.1"
     required_fields = (
         "executive_summary",
         "quality_interpretation",
@@ -169,11 +169,16 @@ class AIInsightJobService:
 
     def _generate_structured_analysis(self, context: dict, model: str) -> dict:
         prompt = (
-            "You are FedRepro's evidence-bound AI analyst. Use only this compact deterministic evidence. "
+            "You are FedRepro's evidence-bound senior machine-learning engineer. Use only this compact deterministic evidence. "
             "Do not calculate or modify MLRS, LRS, SCM, DSI, VRS, findings, fingerprints, profiles, diagnosis, or variant ranking. "
             "Return only valid JSON with these string/list fields: executive_summary, quality_interpretation, "
             "diagnosis_interpretation, semantic_change_interpretation, risk_interpretation, recommended_actions. "
-            "Keep the whole answer concise and practical.\nEvidence:\n"
+            "Write each narrative field as a detailed, professional explanation suitable for a senior ML review. "
+            "For diagnosis_interpretation, cover ML training readiness, leakage risk, stability/drift, data-quality evidence, "
+            "what the diagnosis statistics mean, what the findings do and do not prove, and how the variant generator or experiment handoff should use the evidence. "
+            "For quality_interpretation and semantic_change_interpretation, cite concrete observed values and affected evidence from the context. "
+            "recommended_actions must be a list of specific, evidence-bound next checks or actions, not generic advice. "
+            "Do not be terse; use enough detail to explain why each conclusion follows from the supplied evidence.\nEvidence:\n"
             f"{json.dumps(context, default=str)}"
         )
         payload = {

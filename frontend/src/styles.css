@@ -1659,13 +1659,18 @@ td { color: var(--color-text-soft); }
   margin-bottom: var(--sp-3);
 }
 .section-kicker h2 { margin: 0; }
-.quality-grid { grid-template-columns: repeat(auto-fit,minmax(190px,1fr)); }
+.quality-grid { grid-template-columns: repeat(auto-fit,minmax(210px,1fr)); align-items: stretch; }
 .evidence-grid { grid-template-columns: repeat(3,minmax(0,1fr)); }
 .smart-card {
-  min-height: 118px;
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  align-content: start;
+  gap: var(--sp-2);
+  min-width: 0;
+  min-height: 136px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  padding: var(--sp-3);
+  padding: var(--sp-4);
   background: var(--color-surface);
   color: var(--color-text);
   text-align: left;
@@ -1677,35 +1682,45 @@ td { color: var(--color-text-soft); }
 .smart-card.medium, .risk-gauge.medium, .mini-bar-row.medium, .severity-chip.medium { border-color: var(--color-warning-line); }
 .smart-card.high, .smart-card.critical, .risk-gauge.high, .risk-gauge.critical, .mini-bar-row.high, .mini-bar-row.critical, .severity-chip.high, .severity-chip.critical { border-color: var(--color-danger-line); }
 .smart-card-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 30px minmax(0,1fr);
+  align-items: start;
   gap: var(--sp-2);
   color: var(--color-text-muted);
   font-size: 11px;
+  font-weight: 700;
+  line-height: 1.25;
 }
 .smart-card-top span {
   display: grid;
-  width: 26px;
-  height: 26px;
+  width: 30px;
+  height: 30px;
   place-items: center;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   color: var(--color-primary);
   background: var(--color-surface-2);
 }
+.smart-card-top strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
 .smart-card-value {
-  margin-top: var(--sp-3);
+  min-width: 0;
   color: var(--color-text);
   font-size: 24px;
   font-weight: 800;
   letter-spacing: 0;
+  line-height: 1.12;
+  overflow-wrap: anywhere;
 }
 .smart-card p {
-  margin: 4px 0 0;
+  margin: 0;
   color: var(--color-text-muted);
   font-size: 12px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 .diagnosis-metric-stage { grid-template-columns: repeat(auto-fit,minmax(150px,1fr)); }
 .risk-gauge {
@@ -2036,16 +2051,17 @@ td { color: var(--color-text-soft); }
   padding-bottom: 2px;
 }
 .quality-figure-grid .smart-card {
-  min-height: 104px;
-  min-width: 118px;
+  min-height: 132px;
+  min-width: 138px;
   padding: var(--sp-3);
 }
 .quality-figure-grid .smart-card-value { font-size: 20px; }
 .quality-figure-grid .mini-bar-row {
-  grid-template-columns: 54px 1fr auto;
+  grid-template-columns: minmax(38px,.7fr) minmax(42px,1fr) auto;
   border: 0;
   padding: 5px 0 0;
   background: transparent;
+  min-width: 0;
 }
 .quality-figure-grid .class-bars { margin-top: 4px; }
 .quality-figure-grid .class-bars .mini-bar-row {

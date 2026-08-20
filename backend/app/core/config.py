@@ -25,8 +25,8 @@ class Settings(BaseSettings):
     ai_warmup_mode: str = "recent"
     ai_warmup_recent_versions: int = 3
     ai_warmup_max_jobs: int = 5
-    ai_version_analysis_max_tokens: int = 500
-    ai_report_max_tokens: int = 1500
+    ai_version_analysis_max_tokens: int = 2200
+    ai_report_max_tokens: int = 2600
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
